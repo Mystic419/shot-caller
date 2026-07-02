@@ -1,0 +1,6 @@
+{
+  "excluded_tank_ids": [53841],
+  "notes": {
+    "53841": "Never call TOG II* for detachments"
+  }
+}
