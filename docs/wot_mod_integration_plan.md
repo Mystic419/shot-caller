@@ -593,6 +593,19 @@ methods that appear to mutate state. Rate-limit later update logs. Run once for
 basic window detection and again during active Stronghold hours for richer
 roster/tier evidence. No UI, lookup, configuration, helper, or backend work.
 
+### Prototype 3C: Stronghold entity/unit/roster probe
+
+Prototype 3B showed that the watcher is primarily a vehicle suitability/cache
+layer, not the roster source. Prototype 3C should map the Stronghold entity,
+unit, context, item, requester, and PRB dispatcher modules, then make one
+guarded getter-only probe when the watcher starts. Prefer `prb_getters`, the
+PRB dispatcher entity, and no-argument entity getters such as unit data,
+roster, players, members, and commander DBID.
+
+Log short values and bounded keys/attributes for roster-like data. Never call
+methods that could alter session state. Retain battle-room and browser URL
+detection. No UI, external lookup, helper, configuration, or backend work.
+
 ### 3. Detachment detection
 
 Goal:

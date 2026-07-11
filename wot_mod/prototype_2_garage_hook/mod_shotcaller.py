@@ -1,30 +1,42 @@
-"""Prototype 3B: safe Stronghold watcher context diagnostics."""
-
-import time
+"""Prototype 3C: safe Stronghold entity, unit, and roster discovery probe."""
 
 
 TAG = '[shotcaller]'
 WATCHER_MARKER_PREFIX = '_shotcaller_stronghold_watcher_'
 WINDOW_MARKER_PREFIX = '_shotcaller_stronghold_window_'
-WINDOW_METHOD_HINTS = ('load', 'loaded', 'show', 'create', 'init')
-CONTEXT_HINTS = ('unit', 'entity', 'roster', 'player', 'member', 'commander',
-                 'vehicles', 'selected', 'level', 'division', 'mode', 'queue',
-                 'settings', 'state')
-MUTATING_METHOD_HINTS = ('start', 'stop', 'update', 'set', 'clear', 'select',
-                         'leave', 'join', 'assign', 'kick', 'invite', 'ready')
-MAX_CONTEXT_ATTRIBUTES = 50
-MAX_CONTEXT_METHODS = 50
-UPDATE_LOG_INTERVAL_SECONDS = 5.0
-_start_context_probed = set()
-_update_context_probed = set()
-_last_update_log = {}
+NAME_HINTS = ('stronghold', 'unit', 'roster', 'member', 'commander', 'player',
+              'slot', 'division', 'level', 'tier', 'vehicle', 'settings',
+              'state', 'entity', 'ctx', 'request')
+MUTATING_HINTS = ('join', 'leave', 'set', 'assign', 'kick', 'invite', 'ready',
+                  'select', 'change', 'update', 'start', 'stop', 'create',
+                  'destroy', 'clear')
+MAX_MODULE_CANDIDATES = 30
+MAX_OBJECT_ATTRIBUTES = 30
+_entity_probe_started = set()
+
+MODULE_CANDIDATES = (
+    'gui.prb_control',
+    'gui.prb_control.dispatcher',
+    'gui.prb_control.entities',
+    'gui.prb_control.entities.stronghold',
+    'gui.prb_control.entities.stronghold.unit',
+    'gui.prb_control.entities.stronghold.unit.entity',
+    'gui.prb_control.entities.stronghold.unit.actions_handler',
+    'gui.prb_control.entities.stronghold.unit.permissions',
+    'gui.prb_control.entities.stronghold.unit.ctx',
+    'gui.prb_control.entities.base.unit.entity',
+    'gui.prb_control.entities.base.unit.ctx',
+    'gui.prb_control.items',
+    'gui.prb_control.items.unit_items',
+    'gui.shared.utils.requesters',
+)
 
 
 def _log(message):
     print(TAG + ' ' + message)
 
 
-def _short_repr(value, limit=200):
+def _short_repr(value, limit=300):
     try:
         return repr(value)[:limit]
     except Exception:
@@ -38,74 +50,152 @@ def _short_string(value, limit=300):
         return '<string unavailable>'
 
 
-def _is_context_name(name):
+def _is_interesting_name(name):
     name_lower = name.lower()
-    return any(hint in name_lower for hint in CONTEXT_HINTS)
+    return any(hint in name_lower for hint in NAME_HINTS)
 
 
-def _is_safe_reader_method(name):
+def _is_safe_getter_name(name):
     name_lower = name.lower()
-    if any(hint in name_lower for hint in MUTATING_METHOD_HINTS):
+    if any(hint in name_lower for hint in MUTATING_HINTS):
         return False
     return name_lower.startswith('get') or name_lower.startswith('is') or name_lower.startswith('has')
 
 
-def _log_context_value(kind, name, value):
-    _log('stronghold context ' + kind + ': ' + name + ' type=' +
-         type(value).__name__ + ' repr=' + _short_repr(value))
+def _log_probe_value(name, value):
+    _log('stronghold probe value: ' + name + ' type=' + type(value).__name__ +
+         ' repr=' + _short_repr(value))
 
 
-def _probe_watcher_context(instance, phase):
-    _log('stronghold context phase: ' + phase)
-    _log('stronghold context class: ' + instance.__class__.__name__)
-    _log('stronghold context self: ' + _short_repr(instance, 300))
+def _log_module_candidates(module_name, module):
+    try:
+        count = 0
+        for name in sorted(dir(module)):
+            if name.startswith('_'):
+                continue
+            if not _is_interesting_name(name):
+                continue
+            _log('import candidate: ' + module_name + '.' + name)
+            count += 1
+            if count >= MAX_MODULE_CANDIDATES:
+                _log('import candidate limit reached: ' + module_name)
+                break
+    except Exception as error:
+        _log('import inspect failed: ' + module_name + ': ' + str(error))
+
+
+def _probe_module_imports():
+    for module_name in MODULE_CANDIDATES:
+        try:
+            module = __import__(module_name, fromlist=['*'])
+            _log('import ok: ' + module_name)
+            _log_module_candidates(module_name, module)
+        except Exception as error:
+            _log('import missing: ' + module_name + ': ' + str(error))
 
     try:
-        names = sorted(dir(instance))
+        import gui.shared.utils.requesters as requesters_module
+        requester_class = getattr(requesters_module, 'StrongholdRequester', None)
+        if requester_class is None:
+            raise AttributeError('StrongholdRequester not found')
+        _log('import ok: gui.shared.utils.requesters.StrongholdRequester')
+        _log_module_candidates('gui.shared.utils.requesters.StrongholdRequester', requester_class)
     except Exception as error:
-        _log('stronghold context dir failed: ' + str(error))
+        _log('import missing: gui.shared.utils.requesters.StrongholdRequester: ' + str(error))
+
+
+def _inspect_probe_object(name, value):
+    _log_probe_value(name, value)
+
+    try:
+        if isinstance(value, dict):
+            keys = sorted(value.keys())[:MAX_OBJECT_ATTRIBUTES]
+            _log('stronghold probe keys: ' + name + ' ' + _short_repr(keys))
+            return
+    except Exception as error:
+        _log('stronghold probe keys failed: ' + name + ': ' + str(error))
+
+    try:
+        count = 0
+        for attribute_name in sorted(dir(value)):
+            if attribute_name.startswith('_'):
+                continue
+            if not _is_interesting_name(attribute_name):
+                continue
+            _log('stronghold probe attribute: ' + name + '.' + attribute_name)
+            count += 1
+            if count >= MAX_OBJECT_ATTRIBUTES:
+                break
+    except Exception as error:
+        _log('stronghold probe attributes failed: ' + name + ': ' + str(error))
+
+
+def _call_safe_getter(owner, owner_name, getter_name):
+    try:
+        getter = getattr(owner, getter_name, None)
+        if not callable(getter) or not _is_safe_getter_name(getter_name):
+            return None
+        value = getter()
+        _inspect_probe_object(owner_name + '.' + getter_name + '()', value)
+        return value
+    except Exception as error:
+        _log('stronghold probe getter failed: ' + owner_name + '.' + getter_name + ': ' + str(error))
+        return None
+
+
+def _probe_entity(entity, entity_name):
+    if entity is None:
         return
-
-    attribute_count = 0
-    method_count = 0
-    for name in names:
-        if name.startswith('__'):
-            continue
-        if name.startswith('_shotcaller_'):
-            continue
-        try:
-            value = getattr(instance, name)
-        except Exception as error:
-            if _is_context_name(name):
-                _log('stronghold context attribute read failed: ' + name + ': ' + str(error))
-            continue
-
-        if callable(value):
-            if method_count < MAX_CONTEXT_METHODS:
-                _log('stronghold context method: ' + name)
-                method_count += 1
-            if _is_context_name(name) and _is_safe_reader_method(name):
-                try:
-                    _log_context_value('method result', name, value())
-                except Exception as error:
-                    _log('stronghold context method read failed: ' + name + ': ' + str(error))
-            continue
-
-        if attribute_count < MAX_CONTEXT_ATTRIBUTES:
-            _log('stronghold context attribute name: ' + name)
-            attribute_count += 1
-        if _is_context_name(name):
-            _log_context_value('attribute', name, value)
+    _inspect_probe_object(entity_name, entity)
+    for getter_name in ('getUnitFullData', 'getUnitData', 'getRoster',
+                        'getPlayerInfo', 'getPlayers', 'getMembers',
+                        'getCommanderDBID'):
+        _call_safe_getter(entity, entity_name, getter_name)
 
 
-def _should_log_update(instance):
+def _probe_prb_getters():
+    try:
+        import gui.prb_control.prb_getters as prb_getters
+        _log('import ok: gui.prb_control.prb_getters')
+        for getter_name in ('getClientPrebattle', 'getPrebattleType',
+                            'getPrebattleSettings', 'getUnitMgr',
+                            'getControlSettings'):
+            _call_safe_getter(prb_getters, 'prb_getters', getter_name)
+    except Exception as error:
+        _log('stronghold probe prb_getters failed: ' + str(error))
+
+
+def _probe_dispatcher_entity():
+    dispatcher_object = None
+    try:
+        import gui.prb_control as prb_control_module
+        import gui.prb_control.dispatcher as dispatcher_module
+        from dependencies import dependency
+
+        dispatcher_interface = getattr(prb_control_module, 'IPrbDispatcher', None)
+        if dispatcher_interface is None:
+            dispatcher_interface = getattr(dispatcher_module, 'IPrbDispatcher', None)
+        if dispatcher_interface is not None:
+            dispatcher_object = dependency.instance(dispatcher_interface)
+            _inspect_probe_object('dependency.instance(IPrbDispatcher)', dispatcher_object)
+    except Exception as error:
+        _log('stronghold probe dispatcher dependency failed: ' + str(error))
+
+    if dispatcher_object is not None:
+        _probe_entity(_call_safe_getter(dispatcher_object, 'dispatcher', 'getEntity'),
+                      'dispatcher.getEntity()')
+
+
+def _run_entity_probe(instance):
     instance_id = id(instance)
-    now = time.time()
-    previous = _last_update_log.get(instance_id)
-    if previous is not None and now - previous < UPDATE_LOG_INTERVAL_SECONDS:
-        return False
-    _last_update_log[instance_id] = now
-    return True
+    if instance_id in _entity_probe_started:
+        return
+    _entity_probe_started.add(instance_id)
+    try:
+        _probe_prb_getters()
+        _probe_dispatcher_entity()
+    except Exception as error:
+        _log('stronghold entity probe failed: ' + str(error))
 
 
 def _make_watcher_hook(method_name, original_method):
@@ -120,37 +210,19 @@ def _make_watcher_hook(method_name, original_method):
             raise
 
         try:
-            instance_id = id(instance)
             if method_name == 'start':
                 _log('stronghold watcher started')
-                if instance_id not in _start_context_probed:
-                    _start_context_probed.add(instance_id)
-                    _probe_watcher_context(instance, 'start')
-            elif method_name == 'stop':
+                _run_entity_probe(instance)
+            else:
                 _log('stronghold watcher stopped')
-            elif _should_log_update(instance):
-                _log('stronghold watcher update')
-                if instance_id not in _update_context_probed:
-                    _update_context_probed.add(instance_id)
-                    _probe_watcher_context(instance, 'first update')
         except Exception as error:
             try:
-                _log('stronghold watcher context probe failed: ' + str(error))
+                _log('stronghold entity probe failed: ' + str(error))
             except Exception:
                 pass
         return result
 
     return hooked_method
-
-
-def _short_text(instance, args):
-    parts = [_short_string(instance)]
-    try:
-        for argument in args[:3]:
-            parts.append(_short_string(argument))
-    except Exception:
-        pass
-    return ' | '.join(parts)[:500]
 
 
 def _make_window_hook(class_name, method_name, original_method):
@@ -165,10 +237,13 @@ def _make_window_hook(class_name, method_name, original_method):
             raise
 
         try:
-            text = _short_text(instance, args)
-            if 'strongholdbattleroomwindow' in text.lower():
+            text = _short_string(instance) + ' | ' + ' | '.join(_short_string(arg) for arg in args[:3])
+            text_lower = text.lower()
+            if 'strongholdbattleroomwindow' in text_lower:
                 _log('stronghold battle room window detected')
                 _log('stronghold battle room window: ' + _short_string(instance, 300))
+            if 'wgsh-wotus-static' in text_lower or 'battlerooms' in text_lower:
+                _log('stronghold browser url detected: ' + text[:300])
         except Exception as error:
             try:
                 _log('stronghold window inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
@@ -187,8 +262,7 @@ def _install_hook(target_class, marker_prefix, class_name, method_name, hook_fac
         original_method = getattr(target_class, method_name, None)
         if not callable(original_method):
             return False
-        setattr(target_class, method_name,
-                hook_factory(class_name, method_name, original_method))
+        setattr(target_class, method_name, hook_factory(class_name, method_name, original_method))
         setattr(target_class, marker_name, True)
         return True
     except Exception as error:
@@ -204,20 +278,19 @@ def _install_watcher_hooks():
             _log('stronghold watcher class missing')
             return
         _log('stronghold watcher class: StrongholdVehiclesWatcher')
-        for method_name in ('start', 'stop', '_update'):
-            _install_hook(
-                watcher_class, WATCHER_MARKER_PREFIX,
-                'StrongholdVehiclesWatcher', method_name,
-                lambda class_name, name, original: _make_watcher_hook(name, original))
+        for method_name in ('start', 'stop'):
+            _install_hook(watcher_class, WATCHER_MARKER_PREFIX,
+                          'StrongholdVehiclesWatcher', method_name,
+                          lambda class_name, name, original: _make_watcher_hook(name, original))
     except Exception as error:
         _log('stronghold watcher import failed: ' + str(error))
 
 
 def _install_window_hooks():
-    wulf_window_module = None
+    window_module = None
     window_impl_module = None
     try:
-        import frameworks.wulf.windows_system.window as wulf_window_module
+        import frameworks.wulf.windows_system.window as window_module
     except Exception as error:
         _log('WULF window import failed: ' + str(error))
 
@@ -227,13 +300,12 @@ def _install_window_hooks():
         _log('GUI window implementation import failed: ' + str(error))
 
     try:
-        if wulf_window_module is not None:
-            window_class = getattr(wulf_window_module, 'Window', None)
+        if window_module is not None:
+            window_class = getattr(window_module, 'Window', None)
             if window_class is not None:
                 _install_hook(window_class, WINDOW_MARKER_PREFIX,
                               'frameworks.wulf.windows_system.window.Window',
                               '__init__', _make_window_hook)
-
         if window_impl_module is not None:
             window_impl_class = getattr(window_impl_module, 'WindowImpl', None)
             if window_impl_class is not None:
@@ -246,6 +318,7 @@ def _install_window_hooks():
 
 def init():
     _log('loaded')
+    _probe_module_imports()
     _install_watcher_hooks()
     _install_window_hooks()
 

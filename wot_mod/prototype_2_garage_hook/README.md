@@ -1,32 +1,29 @@
-# Prototype 3B: Stronghold Context Probe
+# Prototype 3C: Stronghold Entity/Unit/Roster Probe
 
-This is only a safe Stronghold context diagnostic for Shot-caller. It does not
-implement hover popups, roster lookup, Wargaming API lookup, configuration, a
-local helper, or backend integration.
+This is only a safe Stronghold entity, unit, roster, and member discovery
+probe for Shot-caller. It does not implement hover popups, Wargaming API
+lookup, a local helper, configuration, or real UI.
 
-## Prototype 3A result
+## Prototype 3B result
 
-Prototype 3A successfully loaded and detected the Stronghold flow:
+Prototype 3B confirmed that the package loads, the Stronghold watcher starts,
+and the battle-room window is detected. The watcher itself mainly exposed
+vehicle suitability/cache state, including `_BaseVehiclesWatcher__itemsCache`,
+`_getUnsuitableVehicles`, `_getVehiclesCustomStates`, and `_update`.
 
-```text
-[shotcaller] stronghold watcher class: StrongholdVehiclesWatcher
-[shotcaller] stronghold watcher started
-[shotcaller] stronghold battle room window detected
-[shotcaller] stronghold watcher stopped
-```
+## Prototype 3C behavior
 
-## Prototype 3B behavior
+The mod logs import status and bounded candidate names for Stronghold unit,
+entity, context, item, and requester modules. On watcher `start`, it performs
+one guarded PRB getter/dispatcher/entity probe. It only calls no-argument
+getter-style accessors and never calls methods that appear to join, leave, set,
+assign, kick, invite, ready, select, change, update, start, stop, create, or
+destroy state.
 
-The mod preserves that watcher and window detection, then adds read-only,
-bounded diagnostics for `StrongholdVehiclesWatcher` on `start` and its first
-`_update`. It logs class/self information, up to 50 non-callable attribute
-names, up to 50 method names, and short type/repr details for Stronghold-like
-candidates. It only makes guarded no-argument calls to getter-style methods
-that do not appear to change state.
-
-Subsequent `_update` messages are rate-limited to avoid log spam. The full
-stringified window object is logged, capped at 300 characters, when the
-`StrongholdBattleRoomWindow` alias is detected.
+Successful values include a short type/repr log and safe keys/attribute names
+when they resemble unit, roster, slot, member, player, tier, division, or
+state data. Existing battle-room detection remains, and a window context that
+contains `wgsh-wotus-static` or `battlerooms` logs a short browser URL line.
 
 ## Confirmed package structure
 
@@ -55,7 +52,7 @@ python build_pyc_wotmod.py
 This produces:
 
 ```text
-dist\shotcaller_0.0.9_stronghold_context_probe.wotmod
+dist\shotcaller_0.0.10_stronghold_entity_probe.wotmod
 ```
 
 ## In-game test
@@ -66,10 +63,10 @@ Copy the package to:
 C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
 ```
 
-Run the test now for basic window detection, then run it again during active
-Stronghold hours for richer roster and tier data. Launch WoT, enter the
-garage, open a Stronghold/skirmish battle room, exit the game, and search
-`python.log` for `shotcaller` and `StrongholdBattleRoomWindow`.
+Launch WoT, enter the garage, and open a Stronghold/skirmish battle room.
+Search `python.log` for `shotcaller`, `StrongholdBattleRoomWindow`, and the
+probe output. Run again during active Stronghold hours for the best chance of
+finding live roster, tier, division, commander, and player data.
 
 ## Success criteria
 
@@ -77,9 +74,9 @@ garage, open a Stronghold/skirmish battle room, exit the game, and search
 
 ```text
 [shotcaller] stronghold watcher started
-[shotcaller] stronghold context attribute: ...
-[shotcaller] stronghold watcher update
+[shotcaller] import ok: gui.prb_control.entities.stronghold.unit.entity
+[shotcaller] stronghold probe value: ...
 ```
 
-The existing `stronghold battle room window detected` and watcher-stop lines
-remain useful confirmation. This is not a finished mod.
+Roster, unit, member, player, tier, or division data would be especially useful
+evidence. This is not a finished mod.

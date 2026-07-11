@@ -7,13 +7,13 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.9_stronghold_context_probe.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.10_stronghold_entity_probe.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.9</version>
-  <name>Shot-caller Stronghold Context Probe</name>
+  <version>0.0.10</version>
+  <name>Shot-caller Stronghold Entity Probe</name>
 </root>
 '''
 
