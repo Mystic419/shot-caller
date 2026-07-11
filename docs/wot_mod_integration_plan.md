@@ -606,6 +606,19 @@ Log short values and bounded keys/attributes for roster-like data. Never call
 methods that could alter session state. Retain battle-room and browser URL
 detection. No UI, external lookup, helper, configuration, or backend work.
 
+### Prototype 3D: Stronghold entity lifecycle/data hook
+
+Prototype 3C found the correct Stronghold entity class family but not a live
+instance through PRB getters or dependency lookup. Prototype 3D hooks existing
+lifecycle/data methods on `StrongholdEntity` and `StrongholdBrowserEntity`,
+then inspects the live `self` object after original methods return.
+
+Keep the hook list small and bounded; deeply inspect only the first few fires
+per class/method. Use only safe no-argument getters and never invoke methods
+that could mutate Stronghold state. Retain watcher, battle-room window, and
+browser URL detection. No UI, external lookup, helper, configuration, or
+backend work.
+
 ### 3. Detachment detection
 
 Goal:
