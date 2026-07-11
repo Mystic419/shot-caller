@@ -1,29 +1,32 @@
-# Prototype 3A: Stronghold Battle Room Detection
+# Prototype 3B: Stronghold Context Probe
 
-This is only a safe Stronghold/battle-room entry and exit detector for
-Shot-caller. It does not implement hover popups, roster lookup, Wargaming API
-lookup, configuration, a local helper, or backend integration.
+This is only a safe Stronghold context diagnostic for Shot-caller. It does not
+implement hover popups, roster lookup, Wargaming API lookup, configuration, a
+local helper, or backend integration.
 
-## Prototype 2E result
+## Prototype 3A result
 
-Prototype 2E loaded and installed a lobby-state hook, but it did not fire for
-the tested flow. The Stronghold/skirmish test revealed more direct targets:
+Prototype 3A successfully loaded and detected the Stronghold flow:
 
 ```text
-gui.prb_control.entities.stronghold.unit.vehicles_watcher.StrongholdVehiclesWatcher
-StrongholdBattleRoomWindow
-https://wgsh-wotus-static.wgcdn.co/.../battlerooms
+[shotcaller] stronghold watcher class: StrongholdVehiclesWatcher
+[shotcaller] stronghold watcher started
+[shotcaller] stronghold battle room window detected
+[shotcaller] stronghold watcher stopped
 ```
 
-## Prototype 3A behavior
+## Prototype 3B behavior
 
-The mod probes `StrongholdVehiclesWatcher`, logs its methods, and safely wraps
-`start` and `stop` when present. It also probes WULF/window implementation
-classes and wraps at most two `__init__` methods. Those wrappers call the
-original method first and only inspect text for `StrongholdBattleRoomWindow`.
+The mod preserves that watcher and window detection, then adds read-only,
+bounded diagnostics for `StrongholdVehiclesWatcher` on `start` and its first
+`_update`. It logs class/self information, up to 50 non-callable attribute
+names, up to 50 method names, and short type/repr details for Stronghold-like
+candidates. It only makes guarded no-argument calls to getter-style methods
+that do not appear to change state.
 
-Browser support is import-probed only; no browser controller is patched.
-Nothing in this prototype changes game state or interacts with battle UI.
+Subsequent `_update` messages are rate-limited to avoid log spam. The full
+stringified window object is logged, capped at 300 characters, when the
+`StrongholdBattleRoomWindow` alias is detected.
 
 ## Confirmed package structure
 
@@ -52,16 +55,10 @@ python build_pyc_wotmod.py
 This produces:
 
 ```text
-dist\shotcaller_0.0.8_stronghold_detect.wotmod
+dist\shotcaller_0.0.9_stronghold_context_probe.wotmod
 ```
 
 ## In-game test
-
-1. Launch WoT.
-2. Enter the garage.
-3. Open a Stronghold/skirmish battle room.
-4. Exit the game.
-5. Search `python.log` for `shotcaller` and `StrongholdBattleRoomWindow`.
 
 Copy the package to:
 
@@ -69,19 +66,20 @@ Copy the package to:
 C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
 ```
 
+Run the test now for basic window detection, then run it again during active
+Stronghold hours for richer roster and tier data. Launch WoT, enter the
+garage, open a Stronghold/skirmish battle room, exit the game, and search
+`python.log` for `shotcaller` and `StrongholdBattleRoomWindow`.
+
 ## Success criteria
 
-`python.log` contains one or both of:
+`python.log` contains:
 
 ```text
 [shotcaller] stronghold watcher started
-[shotcaller] stronghold battle room window detected
+[shotcaller] stronghold context attribute: ...
+[shotcaller] stronghold watcher update
 ```
 
-The corresponding stop line after leaving Stronghold is also useful:
-
-```text
-[shotcaller] stronghold watcher stopped
-```
-
-This is not a finished mod.
+The existing `stronghold battle room window detected` and watcher-stop lines
+remain useful confirmation. This is not a finished mod.

@@ -580,6 +580,19 @@ Wrappers call original methods first, only log detection evidence, and avoid
 duplicate patching. Browser support is probe-only. Do not add battle UI,
 roster lookup, API lookup, configuration, helper, or backend behavior.
 
+### Prototype 3B: Stronghold context probe
+
+Prototype 3A confirmed watcher start/stop and the Stronghold battle-room
+window alias. Prototype 3B keeps those hooks and adds bounded, read-only
+diagnostics on watcher start and the first `_update`: class/self information,
+attribute and method inventories, plus short details for candidate names such
+as unit, roster, player, member, vehicles, level, division, queue, and state.
+
+Only guarded getter-style no-argument methods may be called; never call
+methods that appear to mutate state. Rate-limit later update logs. Run once for
+basic window detection and again during active Stronghold hours for richer
+roster/tier evidence. No UI, lookup, configuration, helper, or backend work.
+
 ### 3. Detachment detection
 
 Goal:
