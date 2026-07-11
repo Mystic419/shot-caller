@@ -506,16 +506,26 @@ Success criteria:
 - `python.log` contains `Shotcaller loaded`
 - no UI changes yet
 
-### 2. Tiny garage UI proof
+### 2. Prototype 2: garage/lobby hook test
 
 Goal:
 
 - prove we can patch a known lobby/garage lifecycle safely
+- package a harmless Python 2.7-compatible hook as an uncompressed
+  `ZIP_STORED` `.wotmod`
 
 Success criteria:
 
-- harmless label, notification, or tiny button appears in garage
+- `python.log` contains `[shotcaller] loaded`
+- `python.log` contains `[shotcaller] garage hook fired`
 - no Stronghold code yet
+
+Implementation boundary:
+
+- hook only a garage/lobby lifecycle method, with installation guarded by
+  `try/except`
+- do not add a detachment UI, popup, configuration, API lookup, helper, or
+  backend integration
 
 ### 3. Detachment detection
 
