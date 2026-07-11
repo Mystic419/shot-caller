@@ -527,6 +527,33 @@ Implementation boundary:
 - do not add a detachment UI, popup, configuration, API lookup, helper, or
   backend integration
 
+### Prototype 2C: legacy Hangar lifecycle proof
+
+Prototype 2B confirmed that the client executes the `.pyc` package and that
+`gui.Scaleform.daapi.view.lobby.hangar.Hangar` is available. Prototype 2C
+patches only the first available Hangar lifecycle method in this order:
+
+1. `_populate`
+2. `_dispose`
+3. `_onRegisterFlashComponent`
+4. `init`
+
+The patch preserves the original method, is guarded against duplicate
+installation, and logs installation plus callback firing. It must not add UI,
+Stronghold/detachment behavior, API lookup, helper, or backend integration.
+
+### Prototype 2D: modern WULF/Gameface Hangar discovery
+
+Prototype 2C found no usable lifecycle method on the legacy Scaleform
+`Hangar` class. Client logs instead identify `HangarWindow`, `RandomHangar`,
+the Gameface `mono/hangar/main` view, and a ready-state message. Prototype 2D
+must not patch anything yet; it should import a small set of modern hangar,
+window, WULF, and lobby-state modules and log matching class/function names.
+
+Use the resulting import and candidate logs to select one concrete lifecycle
+method for the next harmless hook proof. Keep the package as a Python 2.7
+`.pyc` in a `ZIP_STORED` `.wotmod` with root `meta.xml`.
+
 ### 3. Detachment detection
 
 Goal:

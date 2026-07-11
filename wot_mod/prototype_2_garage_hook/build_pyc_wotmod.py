@@ -7,13 +7,13 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.4_garage_probe.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.6_modern_hangar_probe.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.4</version>
-  <name>Shot-caller Garage Probe</name>
+  <version>0.0.6</version>
+  <name>Shot-caller Modern Hangar Probe</name>
 </root>
 '''
 

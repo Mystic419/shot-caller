@@ -1,24 +1,29 @@
-# Prototype 2B: Garage/Lobby Import Discovery
+# Prototype 2D: Modern Hangar Module Discovery
 
-This is only a garage/lobby import and hook discovery run for Shot-caller. It
-does not implement detachment UI, hover popups, configuration, Wargaming API
-lookups, a local helper, or backend integration.
+This is only a read-only Modern WULF/Gameface hangar discovery run for
+Shot-caller. It does not implement detachment UI, hover popups, configuration,
+Wargaming API lookups, a local helper, or backend integration.
 
-## Confirmed results
+## Prototype 2C result
 
-Prototype 2A loaded and executed successfully as a WoT-compatible `.pyc`
-inside a `.wotmod` package:
+Prototype 2C loaded and executed, but the legacy
+`gui.Scaleform.daapi.view.lobby.hangar.Hangar` class did not expose any of the
+tested lifecycle methods. The client logs instead show the modern hangar path:
 
 ```text
-[ASL] executed script in mods folder: mod_shotcaller.pyc
-[shotcaller] loaded
+Loading window: HangarWindow(... content=RandomHangar(...))
+Gameface Load view mono/hangar/main
+HANGAR LOADING STATE: HANGAR UI READY
 ```
 
-The earlier guessed `hangar` import failed, so it is no longer a dependency or
-a hook target. Prototype 2B only probes likely lobby/garage modules and logs
-what this client exposes; it does not patch any lifecycle method.
+## Prototype 2D goal
 
-The confirmed package structure remains:
+Probe likely Modern WULF/Gameface hangar, window, and lobby state-machine
+modules. For each module, `python.log` records its import result and up to 30
+candidate names containing hangar, random, window, state, load, initialize,
+enter, or create. Prototype 2D does not monkey-patch any class or method.
+
+## Confirmed package structure
 
 ```text
 meta.xml
@@ -27,17 +32,10 @@ res/scripts/client/gui/mods/mod_shotcaller.pyc
 
 The package is a `ZIP_STORED` (no-compression) archive.
 
-## Files
-
-- `mod_shotcaller.py` - Python 2.7-compatible import discovery mod
-- `build_pyc_wotmod.py` - creates the `.pyc` + `meta.xml` test package
-- `build_raw_py_wotmod.bat` and `build_raw_py_wotmod.py` - earlier raw-source
-  package test only
-
 ## Build
 
-First compile `mod_shotcaller.py` with the WoT-compatible Python version and
-place the resulting file beside the source as:
+Compile `mod_shotcaller.py` with the WoT-compatible Python version and place
+the output beside the source as:
 
 ```text
 mod_shotcaller.pyc
@@ -52,13 +50,13 @@ python build_pyc_wotmod.py
 This produces:
 
 ```text
-dist\shotcaller_0.0.4_garage_probe.wotmod
+dist\shotcaller_0.0.6_modern_hangar_probe.wotmod
 ```
 
 ## In-game test
 
 Remove earlier Shot-caller test packages before testing this one. Copy
-`shotcaller_0.0.4_garage_probe.wotmod` to:
+`shotcaller_0.0.6_modern_hangar_probe.wotmod` to:
 
 ```text
 C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
@@ -68,21 +66,18 @@ Start WoT and enter the garage/lobby.
 
 ## Success criteria
 
-`python.log` shows the environment and per-module import results, including
-lines such as:
+`python.log` contains:
 
 ```text
 [shotcaller] loaded
-[shotcaller] python version: ...
-[shotcaller] BigWorld import: ok
-[shotcaller] import ok: gui.Scaleform.daapi.view.lobby
-[shotcaller] import missing: gui.impl.lobby.hangar
+[shotcaller] import ok: <modern module>
+[shotcaller] candidate: <modern module>.<class or function>
 ```
 
-If a likely class or lifecycle symbol is present, the probe logs it as a
-`class candidate` or `hook candidate`; it does not patch it.
+Import failures are also useful evidence and are logged as:
 
-## Failure criteria
+```text
+[shotcaller] import missing: <module>: <error>
+```
 
-The test failed if the package does not load, no import results appear in
-`python.log`, or import/probe errors appear. This is not a finished mod.
+This is not a finished mod.
