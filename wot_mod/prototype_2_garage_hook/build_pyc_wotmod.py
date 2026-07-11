@@ -7,25 +7,30 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.3_pyc.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.4_garage_probe.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.3</version>
-  <name>Shot-caller</name>
+  <version>0.0.4</version>
+  <name>Shot-caller Garage Probe</name>
 </root>
 '''
 
 
 def main():
     script_directory = os.path.dirname(os.path.abspath(__file__))
+    source_path = os.path.join(script_directory, 'mod_shotcaller.py')
     pyc_path = os.path.join(script_directory, 'mod_shotcaller.pyc')
     output_directory = os.path.join(script_directory, 'dist')
     output_path = os.path.join(output_directory, PACKAGE_NAME)
 
     if not os.path.isfile(pyc_path):
         print('Missing mod_shotcaller.pyc. Compile mod_shotcaller.py with the WoT-compatible Python version first.')
+        return 1
+
+    if os.path.isfile(source_path) and os.path.getmtime(pyc_path) < os.path.getmtime(source_path):
+        print('mod_shotcaller.pyc is older than mod_shotcaller.py. Compile mod_shotcaller.py with the WoT-compatible Python version first.')
         return 1
 
     if not os.path.isdir(output_directory):

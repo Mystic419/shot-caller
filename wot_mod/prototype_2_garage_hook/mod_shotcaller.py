@@ -1,41 +1,84 @@
-"""Prototype 2: harmless garage/lobby lifecycle hook for Shot-caller."""
+"""Prototype 2B: safe garage/lobby import and hook discovery for Shot-caller."""
+
+import sys
 
 
 TAG = '[shotcaller]'
-_hook_installed = False
-_original_initialize = None
+MODULE_CANDIDATES = (
+    'gui',
+    'gui.Scaleform',
+    'gui.Scaleform.daapi',
+    'gui.Scaleform.daapi.view',
+    'gui.Scaleform.daapi.view.lobby',
+    'gui.Scaleform.daapi.view.lobby.hangar',
+    'gui.impl',
+    'gui.impl.lobby',
+    'gui.impl.lobby.hangar',
+    'gui.shared',
+    'gui.app_loader',
+)
+LIFECYCLE_NAMES = ('_initialize', '_populate', 'onEnter', 'onLeave')
+CLASS_NAMES = ('Hangar', 'HangarView', 'LobbyView')
 
 
 def _log(message):
     print(TAG + ' ' + message)
 
 
-def _garage_initialize_hook(instance, *args, **kwargs):
-    result = _original_initialize(instance, *args, **kwargs)
-    _log('garage hook fired')
-    return result
+def _log_lifecycle_candidates(module_name, module):
+    for lifecycle_name in LIFECYCLE_NAMES:
+        lifecycle = getattr(module, lifecycle_name, None)
+        if callable(lifecycle):
+            _log('hook candidate: ' + module_name + '.' + lifecycle_name)
+
+    for class_name in CLASS_NAMES:
+        candidate_class = getattr(module, class_name, None)
+        if candidate_class is None:
+            continue
+        _log('class candidate: ' + module_name + '.' + class_name)
+        for lifecycle_name in LIFECYCLE_NAMES:
+            lifecycle = getattr(candidate_class, lifecycle_name, None)
+            if callable(lifecycle):
+                _log('hook candidate: ' + module_name + '.' + class_name + '.' + lifecycle_name)
 
 
-def _install_garage_hook():
-    global _hook_installed
-    global _original_initialize
+def _probe_module(module_name):
+    try:
+        module = __import__(module_name, fromlist=['*'])
+        _log('import ok: ' + module_name)
+        _log_lifecycle_candidates(module_name, module)
+    except Exception:
+        _log('import missing: ' + module_name)
 
-    if _hook_installed:
-        return
+
+def _log_environment():
+    _log('python version: ' + sys.version.replace('\n', ' '))
 
     try:
-        from gui.impl.lobby.hangar.hangar import Hangar
+        import BigWorld
+        _log('BigWorld import: ok')
+    except Exception:
+        _log('BigWorld import: missing')
 
-        _original_initialize = Hangar._initialize
-        Hangar._initialize = _garage_initialize_hook
-        _hook_installed = True
-    except Exception as error:
-        _log('hook install failed: ' + str(error))
+    try:
+        import dependencies
+        _log('dependencies import: ok')
+    except Exception:
+        _log('dependencies import: missing')
+
+
+def _run_import_probe():
+    for module_name in MODULE_CANDIDATES:
+        _probe_module(module_name)
 
 
 def init():
     _log('loaded')
-    _install_garage_hook()
+    try:
+        _log_environment()
+        _run_import_probe()
+    except Exception as error:
+        _log('probe failed: ' + str(error))
 
 
 def fini():
