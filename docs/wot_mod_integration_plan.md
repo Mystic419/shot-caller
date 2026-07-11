@@ -554,6 +554,32 @@ Use the resulting import and candidate logs to select one concrete lifecycle
 method for the next harmless hook proof. Keep the package as a Python 2.7
 `.pyc` in a `ZIP_STORED` `.wotmod` with root `meta.xml`.
 
+### Prototype 2E: lobby state navigation hook
+
+Prototype 2D found `gui.lobby_state_machine.lobby_state_machine`,
+`gui.lobby_state_machine.states`, `isHangarState`, and
+`GuiImplViewLobbyState`. Prototype 2E logs methods on the relevant state
+classes before patching at most two clear points: first
+`LobbyStateMachine.goTo`, then `GuiImplViewLobbyState._onEntered` if present.
+
+Each wrapper calls the original method before inspecting a short,
+exception-safe representation of `self` and its arguments. It logs only
+Hangar contexts, identified by `hangar` text or `isHangarState(self)`. Keep
+this to a lifecycle proof: no UI, Stronghold/detachment behavior, lookup,
+helper, or backend integration.
+
+### Prototype 3A: Stronghold battle-room detection
+
+Prototype 2E did not fire in the tested Stronghold flow. The client logs
+identified `StrongholdVehiclesWatcher`, `StrongholdBattleRoomWindow`, and the
+Stronghold browser URL path ending in `battlerooms`. Prototype 3A wraps
+`StrongholdVehiclesWatcher.start` and `.stop` when present, then inspects at
+most two WULF/window initialization paths for the exact battle-room alias.
+
+Wrappers call original methods first, only log detection evidence, and avoid
+duplicate patching. Browser support is probe-only. Do not add battle UI,
+roster lookup, API lookup, configuration, helper, or backend behavior.
+
 ### 3. Detachment detection
 
 Goal:

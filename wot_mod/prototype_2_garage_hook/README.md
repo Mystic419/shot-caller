@@ -1,27 +1,29 @@
-# Prototype 2D: Modern Hangar Module Discovery
+# Prototype 3A: Stronghold Battle Room Detection
 
-This is only a read-only Modern WULF/Gameface hangar discovery run for
-Shot-caller. It does not implement detachment UI, hover popups, configuration,
-Wargaming API lookups, a local helper, or backend integration.
+This is only a safe Stronghold/battle-room entry and exit detector for
+Shot-caller. It does not implement hover popups, roster lookup, Wargaming API
+lookup, configuration, a local helper, or backend integration.
 
-## Prototype 2C result
+## Prototype 2E result
 
-Prototype 2C loaded and executed, but the legacy
-`gui.Scaleform.daapi.view.lobby.hangar.Hangar` class did not expose any of the
-tested lifecycle methods. The client logs instead show the modern hangar path:
+Prototype 2E loaded and installed a lobby-state hook, but it did not fire for
+the tested flow. The Stronghold/skirmish test revealed more direct targets:
 
 ```text
-Loading window: HangarWindow(... content=RandomHangar(...))
-Gameface Load view mono/hangar/main
-HANGAR LOADING STATE: HANGAR UI READY
+gui.prb_control.entities.stronghold.unit.vehicles_watcher.StrongholdVehiclesWatcher
+StrongholdBattleRoomWindow
+https://wgsh-wotus-static.wgcdn.co/.../battlerooms
 ```
 
-## Prototype 2D goal
+## Prototype 3A behavior
 
-Probe likely Modern WULF/Gameface hangar, window, and lobby state-machine
-modules. For each module, `python.log` records its import result and up to 30
-candidate names containing hangar, random, window, state, load, initialize,
-enter, or create. Prototype 2D does not monkey-patch any class or method.
+The mod probes `StrongholdVehiclesWatcher`, logs its methods, and safely wraps
+`start` and `stop` when present. It also probes WULF/window implementation
+classes and wraps at most two `__init__` methods. Those wrappers call the
+original method first and only inspect text for `StrongholdBattleRoomWindow`.
+
+Browser support is import-probed only; no browser controller is patched.
+Nothing in this prototype changes game state or interacts with battle UI.
 
 ## Confirmed package structure
 
@@ -50,34 +52,36 @@ python build_pyc_wotmod.py
 This produces:
 
 ```text
-dist\shotcaller_0.0.6_modern_hangar_probe.wotmod
+dist\shotcaller_0.0.8_stronghold_detect.wotmod
 ```
 
 ## In-game test
 
-Remove earlier Shot-caller test packages before testing this one. Copy
-`shotcaller_0.0.6_modern_hangar_probe.wotmod` to:
+1. Launch WoT.
+2. Enter the garage.
+3. Open a Stronghold/skirmish battle room.
+4. Exit the game.
+5. Search `python.log` for `shotcaller` and `StrongholdBattleRoomWindow`.
+
+Copy the package to:
 
 ```text
 C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
 ```
 
-Start WoT and enter the garage/lobby.
-
 ## Success criteria
 
-`python.log` contains:
+`python.log` contains one or both of:
 
 ```text
-[shotcaller] loaded
-[shotcaller] import ok: <modern module>
-[shotcaller] candidate: <modern module>.<class or function>
+[shotcaller] stronghold watcher started
+[shotcaller] stronghold battle room window detected
 ```
 
-Import failures are also useful evidence and are logged as:
+The corresponding stop line after leaving Stronghold is also useful:
 
 ```text
-[shotcaller] import missing: <module>: <error>
+[shotcaller] stronghold watcher stopped
 ```
 
 This is not a finished mod.
