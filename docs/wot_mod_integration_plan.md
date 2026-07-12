@@ -739,6 +739,54 @@ directly owned `BaseExternalUnitWaitingManager` hooks. No framework/global view
 settings/classes, constructors, inherited methods, module-level lobby methods,
 component registration paths, or `__setattr__` hooks are permitted.
 
+### Prototype 3L-repair findings and Prototype 3M
+
+Prototype 3L-repair reached the hangar normally and its narrow converter hooks
+fired in the Skirmish waiting room. `makeSlotsVOs` returned the complete active
+Detachment Members roster as `(boolean, list_of_slot_dicts)`. Each occupied slot
+contains player DBID/name/clan/rating/readiness/commander state plus its selected
+vehicle name, compact descriptor, tier, type, and readiness; it also supplies
+slot order and legionnaire state.
+
+Prototype 3M wraps only `makeSlotsVOs` as the primary source and the three
+named player/vehicle converters as optional supporting hooks. It converts only
+occupied slots into an in-memory, DBID-keyed cache with order, unit ID, tier,
+and generation. It produces concise initial/change logs for members, vehicles,
+readiness, commander state, slots, and removals—without raw converter payloads
+or duplicate unchanged snapshots. Success requires cache population, valid tier
+detection, live change logging, and no startup/lobby errors.
+
+### Prototype 3M success and Prototype 3N validation
+
+Prototype 3M succeeded: it reached the hangar normally and populated an
+in-memory seven-member Tier 8 cache for unit `6849134`. Captured rows included
+DBID, player identity/clan/rating, ordered slot, selected vehicle/intCD,
+commander, and legionnaire state. It also cleared the cache on unload without
+raw payload spam.
+
+The observed `ready=False` values are not yet classified as incorrect because
+the capture was made during battle, when `isFreezed=True`, `playerStatus=3`,
+and `selectedVehicle.isReadyToFight=True` were present. Prototype 3N preserves
+player readiness, vehicle readiness, player status, frozen status, and explicit
+in-battle state independently. It validates these in waiting and battle states,
+plus live updates, two-empty-snapshot protection, unit transitions, safe
+watcher-stop clearing, and a separate possible-volunteer cache. No APIs, UI,
+helper, or persistence are added.
+
+### Prototype 3N ready-state result and detachment-exit validation
+
+Prototype 3N confirmed that readiness extraction is correct. In battle,
+`player_ready=False`, `vehicle_ready=True`, `player_status=3`, and
+`is_frozen=True`; after returning, status becomes `0` and frozen becomes false.
+Ready clicks change `player_ready` to true and status to `2`; battle launch
+changes status back to `3` and freezes the slot without overwriting player
+readiness. The cache now derives `in_battle` strictly from frozen or status 3.
+
+The remaining validation is detachment exit without closing WoT. Watcher stop
+now schedules a one-second token-protected clear. Watcher start and a populated
+roster update explicitly cancel it; otherwise both roster and volunteer caches
+clear with `reason=Stronghold watcher stopped`.
+
 ### 3. Detachment detection
 
 Goal:

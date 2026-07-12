@@ -7,13 +7,13 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.20_skirmish_ui_safe_probe.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.22_skirmish_roster_cache_validation.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.20</version>
-  <name>Shot-caller Skirmish UI Safe Probe</name>
+  <version>0.0.22</version>
+  <name>Shot-caller Skirmish Roster Cache Validation</name>
 </root>
 '''
 
