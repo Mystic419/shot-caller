@@ -7,13 +7,13 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.14_stronghold_web_bridge_probe.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.16_stronghold_event_probe.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.14</version>
-  <name>Shot-caller Stronghold Web Bridge Probe</name>
+  <version>0.0.16</version>
+  <name>Shot-caller Stronghold Event Probe</name>
 </root>
 '''
 

@@ -656,6 +656,25 @@ battle-room window, and URL detection. Do not send messages or otherwise alter
 browser/game state; no UI, external lookup, helper, configuration, or backend
 work.
 
+### Prototype 3H: Stronghold web response/callback probe
+
+Prototype 3G captured `strongholds_battle` web-to-client commands, including a
+live `join_battle` unit ID, but no roster payload. Prototype 3H retains
+`BrowserViewWebHandlers.handleCommand` and inspects the response/callback path
+on Browser, BrowserController, WebBrowser, and EventBus methods.
+
+Track web IDs to correlate requests with later callbacks, log bounded payloads,
+and avoid repeated noise. Keep view/window/URL detection. Never send browser
+messages or modify state; no UI, external lookup, helper, configuration, or
+backend work.
+
+### Prototype 3I: StrongholdEvent introspection probe
+
+Prototype 3H confirmed the response path and repeated `StrongholdEvent` calls.
+Prototype 3I inspects bounded event snapshots and safe getters while tracking
+web-id/action correlations. Mask token, session, auth, password, and secret
+values before logging. Keep all behavior read-only.
+
 ### 3. Detachment detection
 
 Goal:

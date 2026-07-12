@@ -1,326 +1,296 @@
-"""Prototype 3G: safe Stronghold web/browser bridge discovery probe."""
+"""Prototype 3I: safe StrongholdEvent and web response discovery probe."""
+
+import json
+import re
 
 
 TAG = '[shotcaller]'
-BROWSER_MARKER_PREFIX = '_shotcaller_browser_hook_'
-BRIDGE_MARKER_PREFIX = '_shotcaller_bridge_hook_'
-ROSTER_MARKER_PREFIX = '_shotcaller_light_roster_hook_'
-WATCHER_MARKER_PREFIX = '_shotcaller_watcher_hook_'
-WINDOW_MARKER_PREFIX = '_shotcaller_window_hook_'
-BROWSER_METHODS = ('create', 'createBrowser', 'load', 'show', 'close', 'delete',
-                   'onBrowserCreated', 'onBrowserDeleted', '_createBrowser',
-                   '_showBrowser', '_deleteBrowser')
-BRIDGE_METHODS = ('handle', 'handleCommand', 'onCommand', 'onMessage',
-                  'onWebMessage', 'processCommand', 'dispatch', 'invoke',
-                  'receive')
-ROSTER_METHODS = ('__init__', 'init', 'fini', '_loadUnit', '_unloadUnit')
-BROWSER_MODULES = (
-    'gui.game_control.browser_controller',
-    'gui.Scaleform.daapi.view.lobby.browser',
-    'gui.Scaleform.daapi.view.lobby.browser.browser',
-    'gui.Scaleform.daapi.view.lobby.browser.web_handlers',
-    'gui.shared.event_bus',
-    'gui.shared.events',
-)
-BRIDGE_HINTS = ('web', 'browser', 'handler', 'callback', 'command', 'message',
-                'js', 'client', 'receive', 'request', 'response', 'invoke',
-                'event')
-IMPORTANT_BRIDGE_HINTS = ('roster', 'member', 'player', 'slot', 'vehicle',
-                          'unit', 'commander', 'legionary', 'invite',
-                          'battleroom', 'detachment', 'division')
-VIEW_ALIASES = ('strongholdview', 'strongholdbattleroomwindow',
-                'browserwindowmodal', 'fortvehicleselectpopover',
-                'forttifications/strongholdsendsinviteswindow')
-MAX_MODULE_CANDIDATES = 30
-MAX_BRIDGE_HOOKS = 10
-MAX_FIRST_BRIDGE_LOGS = 100
-_bridge_call_count = 0
+MARKER_PREFIX = '_shotcaller_3i_hook_'
+TRACKED_WEB_IDS = {}
+EVENT_SNAPSHOTS = {}
+EVENT_DETAIL_COUNT = 0
+SENSITIVE_PATTERN = re.compile(r"(?i)(access_token|token|session|auth|password|secret)(\s*['\"]?\s*[:=]\s*['\"]?)([^,}\]\s'\"]+)")
+PAYLOAD_HINTS = ('strongholds_battle', 'web_id', 'access_token', 'unit_id',
+                 'roster', 'members', 'players', 'slots', 'vehicle',
+                 'commander', 'legionary', 'periphery', 'battleroom')
+EVENT_HINTS = ('data', 'ctx', 'args', 'kwargs', 'event', 'type', 'alias',
+               'name', 'unit', 'roster', 'member', 'player', 'slot',
+               'vehicle', 'commander', 'state', 'battle', 'division',
+               'level', 'periphery')
+IMPORT_MODULES = ('gui.shared.events', 'gui.impl.lobby.stronghold',
+                  'gui.impl.lobby.stronghold.stronghold_view',
+                  'gui.impl.lobby.stronghold.stronghold_presenter',
+                  'gui.impl.lobby.stronghold.stronghold_helpers',
+                  'gui.impl.lobby.stronghold.stronghold_constants',
+                  'gui.clientgw.strongholds', 'gui.clientgw.strongholds.contexts')
 
 
 def _log(message):
     print(TAG + ' ' + message)
 
 
-def _short_text(value, limit=1000):
+def _mask(text):
     try:
-        return str(value)[:limit]
+        return SENSITIVE_PATTERN.sub(r'\1\2***MASKED***', text)
+    except Exception:
+        return text
+
+
+def _text(value, limit=1000):
+    try:
+        return _mask(str(value)[:limit])
     except Exception:
         return '<string unavailable>'
 
 
-def _combined_text(instance, args, kwargs, limit=1000):
-    parts = [_short_text(instance, limit)]
+def _combined(instance, args, kwargs):
+    parts = [_text(instance)]
     try:
-        parts.extend(_short_text(argument, limit) for argument in args[:5])
+        parts.extend(_text(value) for value in args[:5])
     except Exception:
         pass
     try:
-        parts.append(_short_text(kwargs, limit))
+        parts.append(_text(kwargs))
     except Exception:
         pass
-    return ' | '.join(parts)[:limit]
+    return ' | '.join(parts)[:1500]
 
 
-def _contains_any(text, hints):
-    text_lower = text.lower()
-    return any(hint in text_lower for hint in hints)
+def _contains(text, hints):
+    lower = text.lower()
+    return any(hint in lower for hint in hints)
 
 
-def _log_module_candidates(module_name, module):
+def _parse(args, kwargs):
+    values = list(args) + [kwargs]
+    for value in values:
+        if isinstance(value, dict):
+            return value
+        try:
+            if isinstance(value, basestring):
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return parsed
+        except Exception:
+            pass
+    return None
+
+
+def _remember_command(payload):
+    if not isinstance(payload, dict):
+        return
+    params = payload.get('params') or {}
+    web_id = payload.get('web_id') or params.get('web_id')
+    command = payload.get('command')
+    action = params.get('action')
+    if web_id:
+        TRACKED_WEB_IDS[str(web_id)] = (command, action)
+    if command == 'strongholds_battle':
+        _log('stronghold command: action=' + str(action) + ' web_id=' + str(web_id) +
+             ' unit_id=' + str(params.get('unit_id')) + ' periphery_id=' + str(params.get('periphery_id')))
+
+
+def _log_response(payload, text):
+    web_id = None
+    command = None
+    data = None
+    if isinstance(payload, dict):
+        web_id = payload.get('web_id')
+        command = payload.get('command')
+        data = payload.get('data', payload.get('result', payload.get('params')))
+    if web_id or _contains(text, ('strongholds_battle', 'web_id')):
+        data_type = type(data).__name__
+        try:
+            data_len = str(len(data))
+        except Exception:
+            data_len = 'n/a'
+        keys = []
+        try:
+            if isinstance(data, dict):
+                keys = sorted(data.keys())[:5]
+        except Exception:
+            pass
+        _log('stronghold response: web_id=' + str(web_id) + ' command=' +
+             str(command) + ' data_type=' + data_type + ' data_len=' + data_len +
+             ' data_keys=' + _text(keys, 300))
+    for known_id, detail in TRACKED_WEB_IDS.items():
+        if known_id in text:
+            _log('web response matched: web_id=' + known_id + ' action=' +
+                 str(detail[1]) + ' payload=' + text[:1500])
+
+
+def _event_snapshot(event):
+    values = []
+    for name in sorted(dir(event)):
+        if name.startswith('_') or not _contains(name, EVENT_HINTS):
+            continue
+        try:
+            value = getattr(event, name)
+            if callable(value):
+                if name.lower().startswith(('get', 'is', 'has')) and not _contains(name, ('set', 'change', 'join', 'leave', 'assign', 'kick', 'invite', 'ready', 'select', 'start', 'stop', 'create', 'destroy')):
+                    value = value()
+                else:
+                    continue
+            values.append((name, type(value).__name__, _text(value, 1000)))
+        except Exception as error:
+            values.append((name, 'error', 'ERROR:' + str(error)))
+    return tuple(values)
+
+
+def _inspect_event(event, scope):
+    global EVENT_DETAIL_COUNT
+    snapshot = _event_snapshot(event)
+    key = event.__class__.__name__
+    previous = EVENT_SNAPSHOTS.get(key)
+    EVENT_SNAPSHOTS[key] = snapshot
+    text = _text(event, 1000)
+    important = _contains(text + ' ' + _text(snapshot, 1000), ('roster', 'member', 'player', 'slot', 'vehicle', 'unit', 'battle'))
+    if EVENT_DETAIL_COUNT >= 10 and previous == snapshot and not important:
+        return
+    EVENT_DETAIL_COUNT += 1
+    _log('stronghold event fired: scope=' + _text(scope, 200) + ' type=' + text)
     try:
-        count = 0
-        for name in sorted(dir(module)):
-            if name.startswith('_'):
-                continue
-            if not _contains_any(name, BRIDGE_HINTS):
-                continue
-            _log('web bridge candidate class/function: ' + module_name + '.' + name)
-            count += 1
-            if count >= MAX_MODULE_CANDIDATES:
-                break
-    except Exception as error:
-        _log('web bridge candidate inspect failed: ' + module_name + ': ' + str(error))
+        event_dict = getattr(event, '__dict__', None)
+        if event_dict is not None:
+            _log('stronghold event attr: __dict__ type=' + type(event_dict).__name__ + ' repr=' + _text(event_dict, 1000))
+    except Exception:
+        pass
+    for name, type_name, value in snapshot:
+        _log('stronghold event attr: ' + name + ' type=' + type_name + ' repr=' + _text(value, 1000))
 
 
-def _make_browser_hook(class_name, method_name, original_method):
-    def hooked_method(instance, *args, **kwargs):
+def _make_web_hook(class_name, method_name, original, command_hook):
+    def hooked(instance, *args, **kwargs):
         try:
-            result = original_method(instance, *args, **kwargs)
+            result = original(instance, *args, **kwargs)
         except Exception as error:
-            try:
-                _log('browser hook original failed: ' + method_name + ': ' + str(error))
-            except Exception:
-                pass
+            _log('web hook original failed: ' + class_name + '.' + method_name + ': ' + str(error))
             raise
         try:
-            _log('browser hook fired: ' + method_name)
-            text = _combined_text(instance, args, kwargs, 1000)
-            if _contains_any(text, ('wgsh-wotus-static', 'battlerooms', 'units',
-                                    'stronghold', 'invites', 'battle')):
-                _log('browser url: ' + text[:1000])
+            payload = _parse(args, kwargs)
+            if command_hook:
+                _remember_command(payload)
+            text = _combined(instance, args, kwargs)
+            if _contains(text, PAYLOAD_HINTS):
+                _log('web response candidate: ' + class_name + '.' + method_name + ' ' + text)
+                _log_response(payload, text)
         except Exception as error:
-            try:
-                _log('browser hook inspect failed: ' + method_name + ': ' + str(error))
-            except Exception:
-                pass
+            _log('web hook inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
         return result
-    return hooked_method
+    return hooked
 
 
-def _make_bridge_hook(class_name, method_name, original_method):
-    def hooked_method(instance, *args, **kwargs):
-        global _bridge_call_count
+def _make_event_hook(class_name, method_name, original):
+    def hooked(instance, *args, **kwargs):
         try:
-            result = original_method(instance, *args, **kwargs)
+            result = original(instance, *args, **kwargs)
         except Exception as error:
-            try:
-                _log('web bridge original failed: ' + class_name + '.' + method_name + ': ' + str(error))
-            except Exception:
-                pass
+            _log('event hook original failed: ' + class_name + '.' + method_name + ': ' + str(error))
             raise
         try:
-            _bridge_call_count += 1
-            text = _combined_text(instance, args, kwargs, 1000)
-            if _bridge_call_count <= MAX_FIRST_BRIDGE_LOGS or _contains_any(text, IMPORTANT_BRIDGE_HINTS):
-                _log('web bridge candidate: ' + class_name + '.' + method_name + ' ' + text[:1000])
+            for value in args:
+                if 'strongholdevent' in value.__class__.__name__.lower():
+                    _inspect_event(value, args[1] if len(args) > 1 else None)
         except Exception as error:
-            try:
-                _log('web bridge inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
-            except Exception:
-                pass
+            _log('event hook inspect failed: ' + str(error))
         return result
-    return hooked_method
+    return hooked
 
 
-def _make_light_roster_hook(method_name, original_method):
-    def hooked_method(instance, *args, **kwargs):
+def _make_simple_hook(message, original):
+    def hooked(instance, *args, **kwargs):
         try:
-            result = original_method(instance, *args, **kwargs)
+            result = original(instance, *args, **kwargs)
         except Exception as error:
-            try:
-                _log('roster hook original failed: ' + method_name + ': ' + str(error))
-            except Exception:
-                pass
+            _log(message + ' original failed: ' + str(error))
             raise
-        _log('roster hook fired: ' + method_name)
+        _log(message)
         return result
-    return hooked_method
+    return hooked
 
 
-def _make_watcher_hook(method_name, original_method):
-    def hooked_method(instance, *args, **kwargs):
-        try:
-            result = original_method(instance, *args, **kwargs)
-        except Exception as error:
-            try:
-                _log('stronghold watcher original failed: ' + method_name + ': ' + str(error))
-            except Exception:
-                pass
-            raise
-        _log('stronghold watcher ' + ('started' if method_name == 'start' else 'stopped'))
-        return result
-    return hooked_method
-
-
-def _make_window_hook(class_name, method_name, original_method):
-    def hooked_method(instance, *args, **kwargs):
-        try:
-            result = original_method(instance, *args, **kwargs)
-        except Exception as error:
-            try:
-                _log('window hook original failed: ' + class_name + '.' + method_name + ': ' + str(error))
-            except Exception:
-                pass
-            raise
-        try:
-            text = _combined_text(instance, args, kwargs, 1000)
-            text_lower = text.lower()
-            for alias in VIEW_ALIASES:
-                if alias in text_lower:
-                    _log('stronghold view detected: ' + text[:500])
-                    break
-            if ('http' in text_lower or 'wgsh-wotus-static' in text_lower) and _contains_any(
-                    text, ('battlerooms', '/units/create', '/units/', 'skirmish',
-                           'detachment', 'battle', 'stronghold')):
-                _log('stronghold browser url detected: ' + text[:1000])
-        except Exception as error:
-            try:
-                _log('window hook inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
-            except Exception:
-                pass
-        return result
-    return hooked_method
-
-
-def _install_hook(target, marker_prefix, class_name, method_name, hook_factory):
-    marker_name = marker_prefix + method_name
+def _install(target, class_name, method_name, factory):
     try:
-        if getattr(target, marker_name, False):
-            return False
-        original_method = getattr(target, method_name, None)
-        if not callable(original_method):
-            return False
-        setattr(target, method_name, hook_factory(class_name, method_name, original_method))
-        setattr(target, marker_name, True)
-        return True
+        marker = MARKER_PREFIX + method_name
+        if getattr(target, marker, False):
+            return
+        original = getattr(target, method_name, None)
+        if not callable(original):
+            return
+        setattr(target, method_name, factory(class_name, method_name, original))
+        setattr(target, marker, True)
     except Exception as error:
         _log('hook install failed: ' + class_name + '.' + method_name + ': ' + str(error))
-        return False
 
 
-def _install_light_roster_hooks():
-    try:
-        import gui.prb_control.entities.stronghold.unit.entity as entity_module
-        entity_class = getattr(entity_module, 'StrongholdBrowserEntity', None)
-        if entity_class is None:
-            return
-        _log('stronghold browser entity class: StrongholdBrowserEntity')
-        for method_name in ROSTER_METHODS:
-            _install_hook(entity_class, ROSTER_MARKER_PREFIX,
-                          'StrongholdBrowserEntity', method_name,
-                          lambda class_name, name, original: _make_light_roster_hook(name, original))
-    except Exception as error:
-        _log('stronghold browser entity import failed: ' + str(error))
-
-
-def _install_watcher_hooks():
-    try:
-        import gui.prb_control.entities.stronghold.unit.vehicles_watcher as watcher_module
-        watcher_class = getattr(watcher_module, 'StrongholdVehiclesWatcher', None)
-        if watcher_class is None:
-            return
-        for method_name in ('start', 'stop'):
-            _install_hook(watcher_class, WATCHER_MARKER_PREFIX,
-                          'StrongholdVehiclesWatcher', method_name,
-                          lambda class_name, name, original: _make_watcher_hook(name, original))
-    except Exception as error:
-        _log('stronghold watcher import failed: ' + str(error))
-
-
-def _install_window_hooks():
-    modules = ()
-    try:
-        import frameworks.wulf.windows_system.window as wulf_window_module
-        modules = modules + (('frameworks.wulf.windows_system.window.Window',
-                              getattr(wulf_window_module, 'Window', None)),)
-    except Exception as error:
-        _log('WULF window import missing: ' + str(error))
-    try:
-        import gui.impl.pub.window_impl as window_impl_module
-        modules = modules + (('gui.impl.pub.window_impl.WindowImpl',
-                              getattr(window_impl_module, 'WindowImpl', None)),)
-    except Exception as error:
-        _log('GUI window implementation import missing: ' + str(error))
-    for class_name, window_class in modules:
-        if window_class is not None:
-            _install_hook(window_class, WINDOW_MARKER_PREFIX, class_name,
-                          '__init__', _make_window_hook)
-
-
-def _probe_browser_modules():
-    imported_modules = []
-    try:
-        import gui.game_control as game_control_module
-        browser_controller = getattr(game_control_module, 'BrowserController', None)
-        if browser_controller is None:
-            raise AttributeError('BrowserController not found')
-        _log('import ok: gui.game_control.BrowserController')
-        imported_modules.append(('gui.game_control.BrowserController', browser_controller))
-        for method_name in BROWSER_METHODS:
-            _install_hook(browser_controller, BROWSER_MARKER_PREFIX,
-                          'BrowserController', method_name, _make_browser_hook)
-    except Exception as error:
-        _log('import missing: gui.game_control.BrowserController: ' + str(error))
-
-    for module_name in BROWSER_MODULES:
+def _probe_imports():
+    for module_name in IMPORT_MODULES:
         try:
             module = __import__(module_name, fromlist=['*'])
             _log('import ok: ' + module_name)
-            imported_modules.append((module_name, module))
-            if module_name == 'gui.game_control.browser_controller':
-                browser_controller = getattr(module, 'BrowserController', None)
-                if browser_controller is not None:
-                    _log('browser controller found: gui.game_control.browser_controller.BrowserController')
-                    for method_name in BROWSER_METHODS:
-                        _install_hook(browser_controller, BROWSER_MARKER_PREFIX,
-                                      'BrowserController', method_name,
-                                      _make_browser_hook)
+            for name in sorted(dir(module))[:100]:
+                if not name.startswith('_') and _contains(name, EVENT_HINTS):
+                    _log('stronghold event candidate: ' + module_name + '.' + name)
         except Exception as error:
             _log('import missing: ' + module_name + ': ' + str(error))
 
-    return imported_modules
+
+def _install_hooks():
+    try:
+        import gui.Scaleform.daapi.view.lobby.browser as browser_module
+        handlers = getattr(browser_module, 'BrowserViewWebHandlers', None)
+        browser = getattr(browser_module, 'Browser', None)
+        if handlers is not None:
+            _install(handlers, 'BrowserViewWebHandlers', 'handleCommand', lambda c,n,o: _make_web_hook(c,n,o,True))
+            for name in ('sendResponse', 'sendError', 'sendCommand', 'fireEvent', 'browserCallback', '_sendResponse', '_sendError', '_fireEvent', '_callBrowser'):
+                _install(handlers, 'BrowserViewWebHandlers', name, lambda c,n,o: _make_web_hook(c,n,o,False))
+        if browser is not None:
+            for name in ('as_sendMessageS', 'as_callBrowserS', 'onBrowserCallback', 'onBrowserEvent', 'fireEvent'):
+                _install(browser, 'Browser', name, lambda c,n,o: _make_web_hook(c,n,o,False))
+    except Exception as error:
+        _log('browser import failed: ' + str(error))
+    try:
+        import gui.game_control.BrowserController as controller_module
+        for class_name in ('BrowserController', 'WebBrowser'):
+            target = getattr(controller_module, class_name, None)
+            if target is not None:
+                for name in ('send', 'sendMessage', 'sendResponse', 'sendEvent', 'callback', 'call', 'execute', 'runScript', 'callBrowser', '_send', '_callback', '_sendEvent', '_callBrowser', 'onCallback', 'onEvent'):
+                    _install(target, class_name, name, lambda c,n,o: _make_web_hook(c,n,o,False))
+    except Exception as error:
+        _log('BrowserController import failed: ' + str(error))
+    try:
+        import gui.shared.event_bus as event_bus_module
+        event_bus = getattr(event_bus_module, 'EventBus', None)
+        if event_bus is not None:
+            for name in ('handleEvent', 'fireEvent'):
+                _install(event_bus, 'EventBus', name, _make_event_hook)
+    except Exception as error:
+        _log('EventBus import failed: ' + str(error))
 
 
-def _install_bridge_hooks(imported_modules):
-    installed_count = 0
-    for module_name, module in imported_modules:
-        _log_module_candidates(module_name, module)
-        try:
-            for name in sorted(dir(module)):
-                if installed_count >= MAX_BRIDGE_HOOKS:
-                    return
-                if name.startswith('_') or not _contains_any(name, BRIDGE_HINTS):
-                    continue
-                target = getattr(module, name, None)
-                if target is None:
-                    continue
-                for method_name in BRIDGE_METHODS:
-                    if installed_count >= MAX_BRIDGE_HOOKS:
-                        return
-                    if _install_hook(target, BRIDGE_MARKER_PREFIX,
-                                     module_name + '.' + name, method_name,
-                                     _make_bridge_hook):
-                        installed_count += 1
-        except Exception as error:
-            _log('web bridge hook inspect failed: ' + module_name + ': ' + str(error))
+def _install_light_detections():
+    try:
+        import gui.prb_control.entities.stronghold.unit.vehicles_watcher as watcher_module
+        watcher = getattr(watcher_module, 'StrongholdVehiclesWatcher', None)
+        if watcher is not None:
+            for name in ('start', 'stop'):
+                _install(watcher, 'StrongholdVehiclesWatcher', name, lambda c,n,o: _make_simple_hook('stronghold watcher ' + ('started' if n == 'start' else 'stopped'), o))
+    except Exception:
+        pass
+    try:
+        import frameworks.wulf.windows_system.window as window_module
+        window = getattr(window_module, 'Window', None)
+        if window is not None:
+            _install(window, 'Window', '__init__', lambda c,n,o: _make_simple_hook('stronghold window observed', o))
+    except Exception:
+        pass
 
 
 def init():
     _log('loaded')
-    _install_light_roster_hooks()
-    _install_watcher_hooks()
-    _install_window_hooks()
-    _install_bridge_hooks(_probe_browser_modules())
+    _probe_imports()
+    _install_hooks()
+    _install_light_detections()
 
 
 def fini():
