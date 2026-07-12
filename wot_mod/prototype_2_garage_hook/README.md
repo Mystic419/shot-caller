@@ -1,18 +1,24 @@
-# Prototype 3J: StrongholdClanData Probe
+# Prototype 3L-repair: safe Skirmish converter probe
 
-Prototype 3I confirmed active Stronghold mode through `strongholdOnTimer`:
-tier 8, Sortie, and the `squadInBattle` waiting state were captured. Its
-context also exposed a live `StrongholdClanData` object. Timer events are not
-roster data and are now logged only when their tracked status changes.
+Prototype 3L failed before reaching the hangar because it broadly monkey-patched
+shared Scaleform framework classes during startup. The client then raised
+`AttributeError: 'function' object has no attribute 'DAMAGED'` while importing
+the trade-in popup, followed by a missing lobby `getViewSettings` error.
 
-This probe inspects each StrongholdClanData object once, including safe attrs
-and getters for clan, members, players, roster, slots, vehicles, commander,
-division, tier, and unit data. It keeps masked web responses, join-battle
-summaries, watcher logs, and only Stronghold-specific window detection.
+This repair deliberately does not patch any view, setting, component, loader,
+constructor, base/framework class, global registration path, or module function
+other than these exact functions in `rally.vo_converters`:
 
-## Build
+- `getUnitRosterData`, `getUnitRosterModel`, `makeSortiePlayerVO`, `makePlayerVO`
+- `makeUnitRosterVO`, `makeSlotsVOs`, `makeVehicleVO`, `makeVehicleBasicVO`
+- `makeFortClanBattleRoomVO`
 
-Compile `mod_shotcaller.py` with WoT Python 2.7, then run:
+It only discovers candidate names in five narrow modules. Converter and waiting
+manager wrappers preserve arguments, return values, and original exceptions;
+they log only after a successful original call. Waiting-manager methods are
+patched only when directly present on that class. Sensitive values stay masked.
+
+Build with WoT Python 2.7, then run:
 
 ```bat
 python build_pyc_wotmod.py
@@ -21,22 +27,19 @@ python build_pyc_wotmod.py
 Output:
 
 ```text
-dist\shotcaller_0.0.17_stronghold_clan_data_probe.wotmod
+dist\shotcaller_0.0.20_skirmish_ui_safe_probe.wotmod
 ```
 
-Copy to:
+Copy to `C:\Games\World_of_Tanks_NA\mods\2.3.0.1\`.
+
+Success criteria:
 
 ```text
-C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
+[shotcaller] lobby getViewSettings intact: True
+[shotcaller] safe converter hooks installed: <count>
+[shotcaller] converter hook fired: makePlayerVO
 ```
 
-## Success criteria
-
-```text
-[shotcaller] stronghold status: ...
-[shotcaller] clan data attr: ...
-[shotcaller] stronghold event changed: ...
-```
-
-`strongholdVehicleSelected` with vehicle/player context is especially useful.
-This is not a finished mod.
+First confirm the client reaches the hangar. Converter calls before entering
+Skirmish are optional; the target result is a converter payload containing real
+member, vehicle, and slot data after entering the waiting room.

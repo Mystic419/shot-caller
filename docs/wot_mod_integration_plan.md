@@ -683,6 +683,62 @@ inspects each clan object once through safe attrs/getters, and prioritizes
 vehicle-selection and other non-timer Stronghold events. Mask sensitive web
 values and keep all behavior read-only.
 
+### Prototype 3K: external waiting manager and post-join entity probe
+
+Prototype 3J showed clan identity/status but no roster. Probe
+`BaseExternalUnitWaitingManager`, register live Stronghold/unit entities, and
+run delayed post-join getter-only captures. Keep all behavior read-only.
+
+### Prototype 3K findings
+
+- `StrongholdBrowserEntity` became live before joining and `StrongholdEntity`
+  plus `BaseExternalUnitWaitingManager` became live after waiting-room entry.
+- The native client still logged `Unit roster is not definded`; its entity
+  roster remained undefined.
+- The actual Skirmish waiting room visibly displayed seven active detachment
+  members and their selected vehicles despite that missing native roster.
+
+The screenshot clarifies that the target is a legacy Scaleform Skirmish
+waiting-room view, not the browser battle-room selector, vehicle popover,
+hangar, or regular platoon UI. It has separate Volunteers and Detachment
+Members lists and already renders selected vehicle data for every active row.
+
+### Prototype 3L: Skirmish UI and roster data-provider probe
+
+Probe the legacy Scaleform lobby/rally/stronghold view and data-provider path.
+Import only available candidate modules; hook only existing view lifecycle,
+`as_*S`/data methods, relevant provider methods, Scaleform component
+registration, and the safe waiting-manager request/response methods. Every
+wrapper must call the original unchanged, use bounded masked logging, avoid
+timer/reserve noise, and never mutate UI/game state or send browser/API calls.
+
+Success criteria, in increasing strength:
+
+- `skirmish target view identified` or `skirmish view hook fired`
+- `skirmish data hook fired` with a masked payload
+- `member row captured` containing an actually displayed name and vehicle
+- `volunteer row captured` containing a waiting player
+
+Keep listening through battle/return/join/leave/vehicle changes, with lightweight
+member and volunteer snapshots that log roster additions, removals, and vehicle
+changes without requiring the room to be reopened.
+
+### Prototype 3L failure and 3L-repair
+
+Prototype 3L failed during client startup. Its broad framework monkey-patching
+wrapped shared Scaleform settings/framework classes and caused
+`AttributeError: 'function' object has no attribute 'DAMAGED'` from the
+trade-in popup, followed by `Package gui.Scaleform.daapi.view.lobby does not
+have method getViewSettings`.
+
+Prototype 3L-repair is intentionally narrow: it only discovers names from the
+rally, rally data-provider/VO converter, strongholds, and fortifications
+modules. It may wrap only the explicitly named functions in
+`gui.Scaleform.daapi.view.lobby.rally.vo_converters`; it retains only the three
+directly owned `BaseExternalUnitWaitingManager` hooks. No framework/global view
+settings/classes, constructors, inherited methods, module-level lobby methods,
+component registration paths, or `__setattr__` hooks are permitted.
+
 ### 3. Detachment detection
 
 Goal:

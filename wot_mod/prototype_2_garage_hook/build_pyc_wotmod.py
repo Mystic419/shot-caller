@@ -7,13 +7,13 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.17_stronghold_clan_data_probe.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.20_skirmish_ui_safe_probe.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.17</version>
-  <name>Shot-caller Stronghold Clan Data Probe</name>
+  <version>0.0.20</version>
+  <name>Shot-caller Skirmish UI Safe Probe</name>
 </root>
 '''
 
