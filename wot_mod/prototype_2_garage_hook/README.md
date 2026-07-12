@@ -1,43 +1,39 @@
-# Prototype 3D: Stronghold Entity Lifecycle/Data Hook
+# Prototype 3G: Stronghold Web/Browser Bridge Probe
 
-This is only a safe Stronghold entity lifecycle and data discovery hook for
-Shot-caller. It does not implement hover popups, Wargaming API lookup, a local
-helper, configuration, or real UI.
+This is only a safe Stronghold browser bridge diagnostic for Shot-caller. It
+does not implement hover popups, Wargaming API lookup, a local helper,
+configuration, or real UI.
 
-## Prototype 3C result
+## Prototype 3F result
 
-Prototype 3C confirmed the correct Stronghold class/module family, including:
+Prototype 3F confirmed that BrowserEntity lifecycle and delayed dumps work, but
+`getMembers`, `getPlayers`, `getUnit`, and stats remained empty even after a
+teammate joined. The client then showed `StrongholdView` and initialized the
+web-backed Stronghold SPA:
 
 ```text
-StrongholdEntity
-StrongholdBrowserEntity
-StrongholdDynamicRosterSettings
-StrongholdUnitStats
-StrongholdSettings
-UnitFullData
-PlayerUnitInfo
-SlotInfo
-VehicleInfo
+ViewKey[alias=StrongholdView, name=StrongholdView]
+https://wgsh-wotus-static.wgcdn.co/auth/entry?...
 ```
 
-The runtime PRB getter and dependency lookup did not expose a live entity, so
-Prototype 3D hooks the two confirmed entity classes directly when WoT calls
-them.
+The next investigation is the browser/web bridge rather than BrowserEntity
+roster getters.
 
-## Prototype 3D behavior
+## Prototype 3G behavior
 
-The mod inventories lifecycle/data-related entity methods and hooks up to six
-existing methods per class from the approved candidate list. Every wrapper
-calls the original method first, logs the hook fire, and deeply inspects the
-live `self` object only for the first three fires of each class/method pair.
+BrowserEntity hooks remain only as lightweight lifecycle logging. The mod
+probes BrowserController, lobby browser, web-handler, event bus, and event
+modules; logs import status and candidate names; then safely hooks existing
+browser create/show/delete methods and a bounded number of obvious web-message
+dispatch methods.
 
-Inspection is bounded and read-only: selected unit/roster/member/player/slot/
-vehicle/settings/state/commander/stats attributes are logged, and only safe
-no-argument `get*`, `is*`, `has*`, or `can*` methods are called. State-changing
-method names are never called by the probe.
+Each wrapper calls the original first. It only logs safely stringified context;
+it never sends browser messages, changes game state, calls an API, or displays
+UI. The first 100 web-bridge calls are logged, then only calls whose text looks
+roster-related are retained. Payload text is capped at 1000 characters.
 
-Stronghold watcher, battle-room window, and Stronghold browser URL detection
-remain enabled.
+StrongholdView, StrongholdBattleRoomWindow, browser modal/popover aliases, and
+matching Stronghold URLs remain detected.
 
 ## Confirmed package structure
 
@@ -66,7 +62,7 @@ python build_pyc_wotmod.py
 This produces:
 
 ```text
-dist\shotcaller_0.0.11_stronghold_entity_hook.wotmod
+dist\shotcaller_0.0.14_stronghold_web_bridge_probe.wotmod
 ```
 
 ## In-game test
@@ -77,19 +73,17 @@ Copy the package to:
 C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
 ```
 
-Launch WoT, enter the garage, and open a Stronghold/skirmish battle room.
-Search `python.log` for `shotcaller`, `StrongholdBattleRoomWindow`, and
-Stronghold entity output. Run again during active Stronghold hours for the
-best chance of finding live unit, roster, player, tier, and division data.
+Open the Stronghold/skirmish flow, create or enter a unit, and have a teammate
+join, leave, or select a vehicle if possible. Search `python.log` for
+`StrongholdView`, browser URLs, and `web bridge candidate` lines.
 
 ## Success criteria
 
-`python.log` contains:
-
 ```text
-[shotcaller] stronghold entity hook fired: ...
-[shotcaller] stronghold entity value: ...
+[shotcaller] stronghold view detected: ...
+[shotcaller] browser url: ...
+[shotcaller] web bridge candidate: ...
 ```
 
-`UnitFullData`, roster, `PlayerUnitInfo`, `SlotInfo`, or vehicle information
-would be especially useful evidence. This is not a finished mod.
+Payload text containing player, member, slot, vehicle, or roster data is the
+key result. This is not a finished mod.

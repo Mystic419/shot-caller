@@ -619,6 +619,43 @@ that could mutate Stronghold state. Retain watcher, battle-room window, and
 browser URL detection. No UI, external lookup, helper, configuration, or
 backend work.
 
+### Prototype 3E: focused Stronghold roster/player/tier probe
+
+Prototype 3D confirmed a live `StrongholdBrowserEntity` and identified the
+safe getters for unit data, roster, stats, members, players, vehicles, and
+PlayerUnitInfo. Prototype 3E should hook only the BrowserEntity lifecycle and
+unit callbacks, call originals first, and dump focused state on initialization,
+unit loading, shutdown, and only the first five unit events.
+
+Log bounded PlayerUnitInfo fields, roster setting level/slot ranges, stats, and
+VehicleInfo values. Run during active Stronghold hours for populated data. No
+mutating calls, UI, external lookup, helper, configuration, or backend work.
+
+### Prototype 3F: delayed Stronghold unit/roster capture
+
+Prototype 3E proved BrowserEntity hooks and PlayerUnitInfo vehicle-CD access,
+but the captured room was still empty. Prototype 3F schedules delayed dumps
+after initialization and unit loading, keeps listening to all unit callbacks,
+and snapshots roster IDs/names/slots/vehicle-CD counts in memory.
+
+Suppress unchanged scheduled snapshots while always logging count changes and
+unit events. Inspect slot iterators safely and cap both slot records and total
+dumps. Run during active Stronghold hours. No state mutation, file writes, UI,
+external lookup, helper, configuration, or backend work.
+
+### Prototype 3G: Stronghold web/browser bridge probe
+
+Prototype 3F confirmed that BrowserEntity state remains empty even when the
+Stronghold web flow is active. The client then exposes `StrongholdView` and the
+WG Stronghold SPA URL, so Prototype 3G moves discovery to BrowserController,
+lobby browser modules, web handlers, and event modules.
+
+Patch only existing browser lifecycle and obvious message-dispatch methods;
+call originals first and log bounded payload context. Keep Stronghold view,
+battle-room window, and URL detection. Do not send messages or otherwise alter
+browser/game state; no UI, external lookup, helper, configuration, or backend
+work.
+
 ### 3. Detachment detection
 
 Goal:

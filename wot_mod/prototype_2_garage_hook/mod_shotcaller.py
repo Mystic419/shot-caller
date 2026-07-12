@@ -1,217 +1,150 @@
-"""Prototype 3D: safe Stronghold entity lifecycle and data discovery hooks."""
+"""Prototype 3G: safe Stronghold web/browser bridge discovery probe."""
 
 
 TAG = '[shotcaller]'
-ENTITY_MARKER_PREFIX = '_shotcaller_stronghold_entity_hook_'
-WATCHER_MARKER_PREFIX = '_shotcaller_stronghold_watcher_'
-WINDOW_MARKER_PREFIX = '_shotcaller_stronghold_window_'
-ENTITY_NAME_HINTS = ('unit', 'roster', 'member', 'player', 'slot', 'vehicle',
-                     'settings', 'state', 'commander', 'stats')
-VALUE_NAME_HINTS = ('unit', 'full', 'roster', 'member', 'player', 'slot',
-                    'vehicle', 'account', 'dbid', 'name', 'tier', 'level',
-                    'division')
-MUTATING_HINTS = ('set', 'change', 'join', 'leave', 'assign', 'kick',
-                  'invite', 'ready', 'select', 'start', 'stop', 'create',
-                  'destroy', 'clear', 'update')
-METHOD_HINTS = ('init', 'fini', 'enter', 'exit', 'unit', 'roster', 'member',
-                'player', 'slot', 'vehicle', 'settings', 'state', 'update',
-                'data', 'stats', 'commander')
-ENTITY_METHOD_CANDIDATES = (
-    '__init__', 'init', 'fini', 'leave', '_createActionsHandler',
-    '_createPermissions', '_createVehiclesWatcher', '_createStats',
-    '_createSettings', '_onUnitChanged', '_onUnitPlayerStateChanged',
-    '_onUnitPlayerOnlineStatusChanged', '_onUnitPlayerAdded',
-    '_onUnitPlayerRemoved', '_onUnitRosterChanged', '_onUnitSettingChanged',
-    '_onUnitVehiclesChanged',
+BROWSER_MARKER_PREFIX = '_shotcaller_browser_hook_'
+BRIDGE_MARKER_PREFIX = '_shotcaller_bridge_hook_'
+ROSTER_MARKER_PREFIX = '_shotcaller_light_roster_hook_'
+WATCHER_MARKER_PREFIX = '_shotcaller_watcher_hook_'
+WINDOW_MARKER_PREFIX = '_shotcaller_window_hook_'
+BROWSER_METHODS = ('create', 'createBrowser', 'load', 'show', 'close', 'delete',
+                   'onBrowserCreated', 'onBrowserDeleted', '_createBrowser',
+                   '_showBrowser', '_deleteBrowser')
+BRIDGE_METHODS = ('handle', 'handleCommand', 'onCommand', 'onMessage',
+                  'onWebMessage', 'processCommand', 'dispatch', 'invoke',
+                  'receive')
+ROSTER_METHODS = ('__init__', 'init', 'fini', '_loadUnit', '_unloadUnit')
+BROWSER_MODULES = (
+    'gui.game_control.browser_controller',
+    'gui.Scaleform.daapi.view.lobby.browser',
+    'gui.Scaleform.daapi.view.lobby.browser.browser',
+    'gui.Scaleform.daapi.view.lobby.browser.web_handlers',
+    'gui.shared.event_bus',
+    'gui.shared.events',
 )
-MAX_ENTITY_HOOKS_PER_CLASS = 6
-MAX_DEEP_INSPECTIONS_PER_HOOK = 3
-MAX_ENTITY_ATTRIBUTES = 30
-MAX_ENTITY_GETTERS = 20
-_entity_hook_fire_counts = {}
+BRIDGE_HINTS = ('web', 'browser', 'handler', 'callback', 'command', 'message',
+                'js', 'client', 'receive', 'request', 'response', 'invoke',
+                'event')
+IMPORTANT_BRIDGE_HINTS = ('roster', 'member', 'player', 'slot', 'vehicle',
+                          'unit', 'commander', 'legionary', 'invite',
+                          'battleroom', 'detachment', 'division')
+VIEW_ALIASES = ('strongholdview', 'strongholdbattleroomwindow',
+                'browserwindowmodal', 'fortvehicleselectpopover',
+                'forttifications/strongholdsendsinviteswindow')
+MAX_MODULE_CANDIDATES = 30
+MAX_BRIDGE_HOOKS = 10
+MAX_FIRST_BRIDGE_LOGS = 100
+_bridge_call_count = 0
 
 
 def _log(message):
     print(TAG + ' ' + message)
 
 
-def _short_repr(value, limit=300):
-    try:
-        return repr(value)[:limit]
-    except Exception:
-        return '<repr unavailable>'
-
-
-def _short_string(value, limit=300):
+def _short_text(value, limit=1000):
     try:
         return str(value)[:limit]
     except Exception:
         return '<string unavailable>'
 
 
-def _matches_hints(name, hints):
-    name_lower = name.lower()
-    return any(hint in name_lower for hint in hints)
-
-
-def _is_safe_getter_name(name):
-    name_lower = name.lower()
-    if any(hint in name_lower for hint in MUTATING_HINTS):
-        return False
-    return (name_lower.startswith('get') or name_lower.startswith('is') or
-            name_lower.startswith('has') or name_lower.startswith('can'))
-
-
-def _inspect_value(class_name, value_name, value):
-    _log('stronghold entity value: ' + class_name + '.' + value_name +
-         ' type=' + type(value).__name__ + ' repr=' + _short_repr(value))
+def _combined_text(instance, args, kwargs, limit=1000):
+    parts = [_short_text(instance, limit)]
     try:
-        if isinstance(value, dict):
-            _log('stronghold entity value keys: ' + class_name + '.' +
-                 value_name + ' ' + _short_repr(sorted(value.keys())[:MAX_ENTITY_ATTRIBUTES]))
-            return
-        if isinstance(value, (list, tuple)):
-            _log('stronghold entity value len: ' + class_name + '.' +
-                 value_name + ' ' + str(len(value)))
-            return
-    except Exception as error:
-        _log('stronghold entity value inspect failed: ' + class_name + '.' +
-             value_name + ': ' + str(error))
+        parts.extend(_short_text(argument, limit) for argument in args[:5])
+    except Exception:
+        pass
+    try:
+        parts.append(_short_text(kwargs, limit))
+    except Exception:
+        pass
+    return ' | '.join(parts)[:limit]
 
+
+def _contains_any(text, hints):
+    text_lower = text.lower()
+    return any(hint in text_lower for hint in hints)
+
+
+def _log_module_candidates(module_name, module):
     try:
         count = 0
-        for attribute_name in sorted(dir(value)):
-            if attribute_name.startswith('_'):
+        for name in sorted(dir(module)):
+            if name.startswith('_'):
                 continue
-            if not _matches_hints(attribute_name, VALUE_NAME_HINTS):
+            if not _contains_any(name, BRIDGE_HINTS):
                 continue
-            _log('stronghold entity value attribute: ' + class_name + '.' +
-                 value_name + '.' + attribute_name)
+            _log('web bridge candidate class/function: ' + module_name + '.' + name)
             count += 1
-            if count >= MAX_ENTITY_ATTRIBUTES:
+            if count >= MAX_MODULE_CANDIDATES:
                 break
     except Exception as error:
-        _log('stronghold entity value attributes failed: ' + class_name + '.' +
-             value_name + ': ' + str(error))
+        _log('web bridge candidate inspect failed: ' + module_name + ': ' + str(error))
 
 
-def _inspect_entity_instance(class_name, instance):
-    _log('stronghold entity class: ' + instance.__class__.__name__)
-    _log('stronghold entity self: ' + _short_repr(instance))
-    try:
-        names = sorted(dir(instance))
-    except Exception as error:
-        _log('stronghold entity dir failed: ' + class_name + ': ' + str(error))
-        return
-
-    attribute_count = 0
-    getter_count = 0
-    for name in names:
-        if name.startswith('__') or name.startswith('_shotcaller_'):
-            continue
-        if not _matches_hints(name, ENTITY_NAME_HINTS):
-            continue
-        try:
-            value = getattr(instance, name)
-        except Exception as error:
-            _log('stronghold entity attr read failed: ' + class_name + '.' +
-                 name + ': ' + str(error))
-            continue
-
-        if callable(value):
-            _log('stronghold entity method: ' + class_name + '.' + name)
-            if getter_count < MAX_ENTITY_GETTERS and _is_safe_getter_name(name):
-                getter_count += 1
-                try:
-                    result = value()
-                    _inspect_value(class_name, name + '()', result)
-                except Exception as error:
-                    _log('stronghold entity getter failed: ' + class_name + '.' +
-                         name + ': ' + str(error))
-            continue
-
-        if attribute_count < MAX_ENTITY_ATTRIBUTES:
-            attribute_count += 1
-            _inspect_value(class_name, name, value)
-
-
-def _make_entity_hook(class_name, method_name, original_method):
-    hook_key = class_name + '.' + method_name
-
+def _make_browser_hook(class_name, method_name, original_method):
     def hooked_method(instance, *args, **kwargs):
         try:
             result = original_method(instance, *args, **kwargs)
         except Exception as error:
             try:
-                _log('stronghold entity original failed: ' + hook_key + ': ' + str(error))
+                _log('browser hook original failed: ' + method_name + ': ' + str(error))
             except Exception:
                 pass
             raise
-
         try:
-            _log('stronghold entity hook fired: ' + hook_key)
-            fire_count = _entity_hook_fire_counts.get(hook_key, 0) + 1
-            _entity_hook_fire_counts[hook_key] = fire_count
-            if fire_count <= MAX_DEEP_INSPECTIONS_PER_HOOK:
-                _inspect_entity_instance(class_name, instance)
+            _log('browser hook fired: ' + method_name)
+            text = _combined_text(instance, args, kwargs, 1000)
+            if _contains_any(text, ('wgsh-wotus-static', 'battlerooms', 'units',
+                                    'stronghold', 'invites', 'battle')):
+                _log('browser url: ' + text[:1000])
         except Exception as error:
             try:
-                _log('stronghold entity inspect failed: ' + hook_key + ': ' + str(error))
+                _log('browser hook inspect failed: ' + method_name + ': ' + str(error))
             except Exception:
                 pass
         return result
-
     return hooked_method
 
 
-def _install_entity_hook(entity_class, class_name, method_name):
-    marker_name = ENTITY_MARKER_PREFIX + method_name
-    try:
-        if getattr(entity_class, marker_name, False):
-            return True
-        original_method = getattr(entity_class, method_name, None)
-        if not callable(original_method):
-            return False
-        setattr(entity_class, method_name,
-                _make_entity_hook(class_name, method_name, original_method))
-        setattr(entity_class, marker_name, True)
-        return True
-    except Exception as error:
-        _log('stronghold entity hook install failed: ' + class_name + '.' +
-             method_name + ': ' + str(error))
-        return False
-
-
-def _inspect_and_install_entity_hooks():
-    try:
-        import gui.prb_control.entities.stronghold.unit.entity as entity_module
-        for class_name in ('StrongholdEntity', 'StrongholdBrowserEntity'):
-            entity_class = getattr(entity_module, class_name, None)
-            if entity_class is None:
-                _log('stronghold entity class missing: ' + class_name)
-                continue
-
-            _log('stronghold entity class: ' + class_name)
+def _make_bridge_hook(class_name, method_name, original_method):
+    def hooked_method(instance, *args, **kwargs):
+        global _bridge_call_count
+        try:
+            result = original_method(instance, *args, **kwargs)
+        except Exception as error:
             try:
-                for method_name in sorted(dir(entity_class)):
-                    if method_name.startswith('__') and method_name != '__init__':
-                        continue
-                    if not _matches_hints(method_name, METHOD_HINTS):
-                        continue
-                    if callable(getattr(entity_class, method_name, None)):
-                        _log('stronghold entity method: ' + class_name + '.' + method_name)
-            except Exception as error:
-                _log('stronghold entity method inspect failed: ' + class_name +
-                     ': ' + str(error))
+                _log('web bridge original failed: ' + class_name + '.' + method_name + ': ' + str(error))
+            except Exception:
+                pass
+            raise
+        try:
+            _bridge_call_count += 1
+            text = _combined_text(instance, args, kwargs, 1000)
+            if _bridge_call_count <= MAX_FIRST_BRIDGE_LOGS or _contains_any(text, IMPORTANT_BRIDGE_HINTS):
+                _log('web bridge candidate: ' + class_name + '.' + method_name + ' ' + text[:1000])
+        except Exception as error:
+            try:
+                _log('web bridge inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
+            except Exception:
+                pass
+        return result
+    return hooked_method
 
-            installed_count = 0
-            for method_name in ENTITY_METHOD_CANDIDATES:
-                if installed_count >= MAX_ENTITY_HOOKS_PER_CLASS:
-                    break
-                if _install_entity_hook(entity_class, class_name, method_name):
-                    installed_count += 1
-    except Exception as error:
-        _log('stronghold entity import failed: ' + str(error))
+
+def _make_light_roster_hook(method_name, original_method):
+    def hooked_method(instance, *args, **kwargs):
+        try:
+            result = original_method(instance, *args, **kwargs)
+        except Exception as error:
+            try:
+                _log('roster hook original failed: ' + method_name + ': ' + str(error))
+            except Exception:
+                pass
+            raise
+        _log('roster hook fired: ' + method_name)
+        return result
+    return hooked_method
 
 
 def _make_watcher_hook(method_name, original_method):
@@ -224,13 +157,7 @@ def _make_watcher_hook(method_name, original_method):
             except Exception:
                 pass
             raise
-        try:
-            if method_name == 'start':
-                _log('stronghold watcher started')
-            else:
-                _log('stronghold watcher stopped')
-        except Exception:
-            pass
+        _log('stronghold watcher ' + ('started' if method_name == 'start' else 'stopped'))
         return result
     return hooked_method
 
@@ -241,41 +168,59 @@ def _make_window_hook(class_name, method_name, original_method):
             result = original_method(instance, *args, **kwargs)
         except Exception as error:
             try:
-                _log('stronghold window original failed: ' + class_name + '.' + method_name + ': ' + str(error))
+                _log('window hook original failed: ' + class_name + '.' + method_name + ': ' + str(error))
             except Exception:
                 pass
             raise
         try:
-            text = _short_string(instance) + ' | ' + ' | '.join(_short_string(arg) for arg in args[:3])
+            text = _combined_text(instance, args, kwargs, 1000)
             text_lower = text.lower()
-            if 'strongholdbattleroomwindow' in text_lower:
-                _log('stronghold battle room window detected')
-                _log('stronghold battle room window: ' + _short_string(instance, 300))
-            if 'wgsh-wotus-static' in text_lower or 'battlerooms' in text_lower:
-                _log('stronghold browser url detected: ' + text[:300])
+            for alias in VIEW_ALIASES:
+                if alias in text_lower:
+                    _log('stronghold view detected: ' + text[:500])
+                    break
+            if ('http' in text_lower or 'wgsh-wotus-static' in text_lower) and _contains_any(
+                    text, ('battlerooms', '/units/create', '/units/', 'skirmish',
+                           'detachment', 'battle', 'stronghold')):
+                _log('stronghold browser url detected: ' + text[:1000])
         except Exception as error:
             try:
-                _log('stronghold window inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
+                _log('window hook inspect failed: ' + class_name + '.' + method_name + ': ' + str(error))
             except Exception:
                 pass
         return result
     return hooked_method
 
 
-def _install_generic_hook(target_class, marker_prefix, class_name, method_name, hook_factory):
+def _install_hook(target, marker_prefix, class_name, method_name, hook_factory):
     marker_name = marker_prefix + method_name
     try:
-        if getattr(target_class, marker_name, False):
-            return True
-        original_method = getattr(target_class, method_name, None)
+        if getattr(target, marker_name, False):
+            return False
+        original_method = getattr(target, method_name, None)
         if not callable(original_method):
             return False
-        setattr(target_class, method_name, hook_factory(class_name, method_name, original_method))
-        setattr(target_class, marker_name, True)
+        setattr(target, method_name, hook_factory(class_name, method_name, original_method))
+        setattr(target, marker_name, True)
         return True
     except Exception as error:
         _log('hook install failed: ' + class_name + '.' + method_name + ': ' + str(error))
         return False
+
+
+def _install_light_roster_hooks():
+    try:
+        import gui.prb_control.entities.stronghold.unit.entity as entity_module
+        entity_class = getattr(entity_module, 'StrongholdBrowserEntity', None)
+        if entity_class is None:
+            return
+        _log('stronghold browser entity class: StrongholdBrowserEntity')
+        for method_name in ROSTER_METHODS:
+            _install_hook(entity_class, ROSTER_MARKER_PREFIX,
+                          'StrongholdBrowserEntity', method_name,
+                          lambda class_name, name, original: _make_light_roster_hook(name, original))
+    except Exception as error:
+        _log('stronghold browser entity import failed: ' + str(error))
 
 
 def _install_watcher_hooks():
@@ -283,49 +228,99 @@ def _install_watcher_hooks():
         import gui.prb_control.entities.stronghold.unit.vehicles_watcher as watcher_module
         watcher_class = getattr(watcher_module, 'StrongholdVehiclesWatcher', None)
         if watcher_class is None:
-            _log('stronghold watcher class missing')
             return
         for method_name in ('start', 'stop'):
-            _install_generic_hook(watcher_class, WATCHER_MARKER_PREFIX,
-                                  'StrongholdVehiclesWatcher', method_name,
-                                  lambda class_name, name, original: _make_watcher_hook(name, original))
+            _install_hook(watcher_class, WATCHER_MARKER_PREFIX,
+                          'StrongholdVehiclesWatcher', method_name,
+                          lambda class_name, name, original: _make_watcher_hook(name, original))
     except Exception as error:
         _log('stronghold watcher import failed: ' + str(error))
 
 
 def _install_window_hooks():
-    window_module = None
-    window_impl_module = None
+    modules = ()
     try:
-        import frameworks.wulf.windows_system.window as window_module
+        import frameworks.wulf.windows_system.window as wulf_window_module
+        modules = modules + (('frameworks.wulf.windows_system.window.Window',
+                              getattr(wulf_window_module, 'Window', None)),)
     except Exception as error:
-        _log('WULF window import failed: ' + str(error))
+        _log('WULF window import missing: ' + str(error))
     try:
         import gui.impl.pub.window_impl as window_impl_module
+        modules = modules + (('gui.impl.pub.window_impl.WindowImpl',
+                              getattr(window_impl_module, 'WindowImpl', None)),)
     except Exception as error:
-        _log('GUI window implementation import failed: ' + str(error))
+        _log('GUI window implementation import missing: ' + str(error))
+    for class_name, window_class in modules:
+        if window_class is not None:
+            _install_hook(window_class, WINDOW_MARKER_PREFIX, class_name,
+                          '__init__', _make_window_hook)
+
+
+def _probe_browser_modules():
+    imported_modules = []
     try:
-        if window_module is not None:
-            window_class = getattr(window_module, 'Window', None)
-            if window_class is not None:
-                _install_generic_hook(window_class, WINDOW_MARKER_PREFIX,
-                                      'frameworks.wulf.windows_system.window.Window',
-                                      '__init__', _make_window_hook)
-        if window_impl_module is not None:
-            window_impl_class = getattr(window_impl_module, 'WindowImpl', None)
-            if window_impl_class is not None:
-                _install_generic_hook(window_impl_class, WINDOW_MARKER_PREFIX,
-                                      'gui.impl.pub.window_impl.WindowImpl',
-                                      '__init__', _make_window_hook)
+        import gui.game_control as game_control_module
+        browser_controller = getattr(game_control_module, 'BrowserController', None)
+        if browser_controller is None:
+            raise AttributeError('BrowserController not found')
+        _log('import ok: gui.game_control.BrowserController')
+        imported_modules.append(('gui.game_control.BrowserController', browser_controller))
+        for method_name in BROWSER_METHODS:
+            _install_hook(browser_controller, BROWSER_MARKER_PREFIX,
+                          'BrowserController', method_name, _make_browser_hook)
     except Exception as error:
-        _log('stronghold window hook setup failed: ' + str(error))
+        _log('import missing: gui.game_control.BrowserController: ' + str(error))
+
+    for module_name in BROWSER_MODULES:
+        try:
+            module = __import__(module_name, fromlist=['*'])
+            _log('import ok: ' + module_name)
+            imported_modules.append((module_name, module))
+            if module_name == 'gui.game_control.browser_controller':
+                browser_controller = getattr(module, 'BrowserController', None)
+                if browser_controller is not None:
+                    _log('browser controller found: gui.game_control.browser_controller.BrowserController')
+                    for method_name in BROWSER_METHODS:
+                        _install_hook(browser_controller, BROWSER_MARKER_PREFIX,
+                                      'BrowserController', method_name,
+                                      _make_browser_hook)
+        except Exception as error:
+            _log('import missing: ' + module_name + ': ' + str(error))
+
+    return imported_modules
+
+
+def _install_bridge_hooks(imported_modules):
+    installed_count = 0
+    for module_name, module in imported_modules:
+        _log_module_candidates(module_name, module)
+        try:
+            for name in sorted(dir(module)):
+                if installed_count >= MAX_BRIDGE_HOOKS:
+                    return
+                if name.startswith('_') or not _contains_any(name, BRIDGE_HINTS):
+                    continue
+                target = getattr(module, name, None)
+                if target is None:
+                    continue
+                for method_name in BRIDGE_METHODS:
+                    if installed_count >= MAX_BRIDGE_HOOKS:
+                        return
+                    if _install_hook(target, BRIDGE_MARKER_PREFIX,
+                                     module_name + '.' + name, method_name,
+                                     _make_bridge_hook):
+                        installed_count += 1
+        except Exception as error:
+            _log('web bridge hook inspect failed: ' + module_name + ': ' + str(error))
 
 
 def init():
     _log('loaded')
-    _inspect_and_install_entity_hooks()
+    _install_light_roster_hooks()
     _install_watcher_hooks()
     _install_window_hooks()
+    _install_bridge_hooks(_probe_browser_modules())
 
 
 def fini():
