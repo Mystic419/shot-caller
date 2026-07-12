@@ -7,13 +7,13 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.22_skirmish_roster_cache_validation.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.24_detachment_exit_lifecycle_repair.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.22</version>
-  <name>Shot-caller Skirmish Roster Cache Validation</name>
+  <version>0.0.24</version>
+  <name>Shot-caller Detachment Exit Lifecycle Repair</name>
 </root>
 '''
 

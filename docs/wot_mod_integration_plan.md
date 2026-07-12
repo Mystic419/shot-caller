@@ -787,6 +787,36 @@ now schedules a one-second token-protected clear. Watcher start and a populated
 roster update explicitly cancel it; otherwise both roster and volunteer caches
 clear with `reason=Stronghold watcher stopped`.
 
+### Prototype 3O: reliable detachment-exit lifecycle
+
+Prototype 3N completed the full battle-state validation: ready/unready,
+battle-start/end, and selected-vehicle changes all update the cache correctly;
+unchanged snapshots remain suppressed. Status `0`, `2`, and `3` respectively
+mean not ready, ready, and in battle/frozen. `in_battle` is now a derived
+read-only field from frozen or status 3 and never changes player readiness.
+
+Prototype 3O focuses solely on reliable exit while WoT stays open. It retains
+only the four proven converter hooks and hooks only direct `start`/`stop`
+methods on the exact Stronghold watcher class. The lifecycle state machine uses
+watcher and populated-roster generations plus a one-second pending exit token.
+It must ignore a transient replacement stop but clear active and volunteer
+caches after a confirmed normal detachment exit, then support fresh re-entry.
+
+### Prototype 3O failure and 3O-repair
+
+Prototype 3O's watcher lifecycle hooks never installed because `start` and
+`stop` are inherited from `BaseVehiclesWatcher`; the strict subclass
+`__dict__` safety check therefore skipped both. Native logs nevertheless
+confirmed that the base methods are the correct lifecycle source.
+
+Prototype 3O-repair patches only direct `BaseVehiclesWatcher.start`/`.stop`
+methods, then strictly filters every wrapper call to actual
+`StrongholdVehiclesWatcher` instances using `isinstance` (with exact module and
+class-name fallback). Ordinary base watcher calls do not mutate state or cancel
+an exit. The probe logs hook origins/installation, supports transient
+Stronghold replacement cancellation, and clears only after an un-replaced,
+un-updated one-second stop confirmation.
+
 ### 3. Detachment detection
 
 Goal:
