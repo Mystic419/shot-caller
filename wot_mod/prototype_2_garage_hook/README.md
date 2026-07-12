@@ -1,39 +1,30 @@
-# Prototype 3I: StrongholdEvent Introspection Probe
+# Prototype 3J: StrongholdClanData Probe
 
-This is a safe Stronghold event and web-response diagnostic only.
-It does not implement UI, API lookup, a helper, configuration, or backend integration.
+Prototype 3I confirmed active Stronghold mode through `strongholdOnTimer`:
+tier 8, Sortie, and the `squadInBattle` waiting state were captured. Its
+context also exposed a live `StrongholdClanData` object. Timer events are not
+roster data and are now logged only when their tracked status changes.
 
-## Prototype 3H result
-
-Prototype 3H found the `WebBrowser.sendMessage` response path.
-It kept web-id/action correlation and captured the `join_battle` unit ID.
-It also exposed repeated `StrongholdEvent` calls in the waiting room.
-
-An access token was accidentally logged in 3H.
-Prototype 3I masks access_token, token, session, auth, password, and secret values.
-
-## Prototype 3I behavior
-
-The mod retains command/response correlation and hooks EventBus events.
-It logs the first ten StrongholdEvent snapshots, then only changed or roster-relevant ones.
-It inspects safe attributes, `__dict__`, and `get*`/`is*`/`has*` methods.
-Reserve response dictionaries are summarized rather than dumped.
+This probe inspects each StrongholdClanData object once, including safe attrs
+and getters for clan, members, players, roster, slots, vehicles, commander,
+division, tier, and unit data. It keeps masked web responses, join-battle
+summaries, watcher logs, and only Stronghold-specific window detection.
 
 ## Build
 
-Compile `mod_shotcaller.py` with WoT Python 2.7 and place `mod_shotcaller.pyc` beside it.
+Compile `mod_shotcaller.py` with WoT Python 2.7, then run:
 
 ```bat
 python build_pyc_wotmod.py
 ```
 
-This produces:
+Output:
 
 ```text
-dist\shotcaller_0.0.16_stronghold_event_probe.wotmod
+dist\shotcaller_0.0.17_stronghold_clan_data_probe.wotmod
 ```
 
-Copy it to:
+Copy to:
 
 ```text
 C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
@@ -42,9 +33,10 @@ C:\Games\World_of_Tanks_NA\mods\2.3.0.1\
 ## Success criteria
 
 ```text
-[shotcaller] stronghold event fired: ...
-[shotcaller] stronghold event attr: ...
+[shotcaller] stronghold status: ...
+[shotcaller] clan data attr: ...
+[shotcaller] stronghold event changed: ...
 ```
 
-Unit, roster, member, player, slot, or vehicle state inside an event is the key result.
+`strongholdVehicleSelected` with vehicle/player context is especially useful.
 This is not a finished mod.

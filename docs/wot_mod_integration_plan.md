@@ -675,6 +675,14 @@ Prototype 3I inspects bounded event snapshots and safe getters while tracking
 web-id/action correlations. Mask token, session, auth, password, and secret
 values before logging. Keep all behavior read-only.
 
+### Prototype 3J: StrongholdClanData and event-type probe
+
+Prototype 3I identified active Sortie tier/state in `strongholdOnTimer` and a
+live StrongholdClanData object. Prototype 3J filters repeated timer events,
+inspects each clan object once through safe attrs/getters, and prioritizes
+vehicle-selection and other non-timer Stronghold events. Mask sensitive web
+values and keep all behavior read-only.
+
 ### 3. Detachment detection
 
 Goal:
