@@ -1390,3 +1390,41 @@ The 0.0.55 leak was caused by the former multiline heading delimiter flowing int
 # Prototype 0.0.57 — state classifier
 
 `_classify_history_state(roster)` distinguishes a real selected but unsupported tier from incomplete and mixed selection. `_apply` computes both `resolved_tier` and the supported lookup tier from merged rows, after source-precedence reconciliation, preventing sparse entity data from collapsing Tier V to unknown. Informational state uses the existing SWF and clears row/scroll state; no sidecar request is permitted without a supported lookup tier.
+
+## Native transport investigation (development-only)
+
+The stable 0.0.58 sidecar remains the default. A source-only, sidecar-free
+transport investigation identified `BigWorld.fetchURL` as the client-provided
+asynchronous HTTP API: WoT's own `gui.clientgw.factory` passes the full request
+signature to it, and client uilogging callbacks read `response.responseCode`
+and `response.body`. The mod now has a dormant `request_json` adapter and a
+one-player `tanks/stats` probe behind `LOOKUP_TRANSPORT = 'native'`; no public
+package was created and no UI behavior changed. It uses logical cancellation
+plus `BigWorld.callback` dispatch, while a later migration would still need a
+bounded per-player scheduler, tankopedia resolver, and atomic six-hour disk
+cache. See `docs/native_transport_investigation.md` for the audit, cache
+design, request-count analysis, application-ID constraints, and in-game test
+gate.
+
+## Prototype 0.0.60 native lookup migration
+
+The controlled in-client HTTPS probe returned WG `tanks/stats` HTTP 200 in
+3.79 seconds, with 283 records and valid `all.battles` fields. Accordingly,
+0.0.60 promotes WoT's own asynchronous `BigWorld.fetchURL` into the normal
+lookup coordinator. The sidecar is retained only in repository source as a
+rollback reference and is neither contacted nor packaged. The native path
+resolves NA/EU/ASIA endpoints from `CURRENT_REALM`, batches up to 15 valid
+unique DBIDs, uses cache-first player/tank metadata records under
+`mods/configs/shotcaller/cache/`, and discards stale lifecycle generations.
+The pre-existing UI, filter, battle-count, platoon, and Stronghold behavior is
+unchanged. This is a functional migration test, not the final public release.
+
+## Prototype 0.0.61 native lookup identity repair
+
+The first native live response was valid but was dropped because a harmless
+ready/status update advanced the broad roster generation. Native response
+validity now uses only material lookup identity—context, unit/session, realm,
+supported tier, and active DBID set. Same-tier UI-state changes accept the
+response, cache it, and refresh the open history panel. Real identity changes
+produce one deduplicated replacement evaluation, preventing an indefinite
+Pending state.

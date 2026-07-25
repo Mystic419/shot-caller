@@ -372,3 +372,28 @@ bold vehicle-class heading inside the clipping rectangle.
 
 - History state is now classified from merged normalized roster rows: empty, incomplete, mixed, resolved unsupported, loading, or ready.
 - Informational mode hides Previous/Next and scrollbar/track, leaving Settings and Close at x=48 and x=220; normal history restores the four-control layout.
+
+# Prototype 0.0.60 — native in-client lookup migration
+
+- The sidecar is no longer required by this migration test package. Native
+  asynchronous `BigWorld.fetchURL` performs official WG HTTPS requests only
+  when a supported platoon or Stronghold roster needs history data.
+- The normal UI, roster lifecycle, filters, battle counts, scrolling, dragging,
+  and unsupported-tier presentation are unchanged.
+- Player/tier records and shared Tankopedia metadata use six-hour,
+  schema-versioned public-data cache files at `mods/configs/shotcaller/cache/`.
+  Corrupt cache files are ignored and stale records are used after a temporary
+  native transport failure.
+- NA, EU, and ASIA endpoints are selected from the client realm. The test
+  builder injects a public WG API application ID from the developer `.env` into
+  temporary compiled source; users install only the resulting `.wotmod`.
+- 0.0.60 is a native migration validation build, not yet the final release.
+
+# Prototype 0.0.61 — native lookup identity repair
+
+- Public vehicle-history requests no longer use the broad roster UI generation
+  as their stale token. Ready/status and same-tier vehicle-state refreshes now
+  accept a matching native result and refresh an open Pending panel.
+- Room/unit changes, tier changes, realm changes, battle entry, and removed
+  roster members remain material invalidations. They trigger one deduplicated,
+  cache-aware replacement evaluation rather than leaving the panel Pending.

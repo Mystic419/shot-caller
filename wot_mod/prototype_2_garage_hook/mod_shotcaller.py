@@ -5,9 +5,9 @@ import json
 import os
 import re
 import socket
-import threading
 import time
 import traceback
+import urllib
 import urllib2
 
 TAG = '[shotcaller]'; MARK = '_shotcaller_5b_selection_'
@@ -37,10 +37,24 @@ PLATOON_REBUILD_TOKEN = 0
 ROW_FIELD_SOURCES = {}
 PLATOON_MERGE_LOGGED = set()
 WATCHER_FILTER_LOGGED = False
-SIDECAR = 'http://127.0.0.1:37841'
+LOOKUP_TRANSPORT = 'native'
+# The 0.0.60 development builder injects a project public WG application ID
+# into temporary compilation source. The repository never contains its value.
+NATIVE_WG_APP_ID = None
+NATIVE_REALMS = {'NA': 'https://api.worldoftanks.com', 'EU': 'https://api.worldoftanks.eu', 'ASIA': 'https://api.worldoftanks.asia'}
+NATIVE_DEFAULT_REALM = 'NA'
+NATIVE_CACHE_TTL = 6 * 60 * 60
+NATIVE_MAX_BATCH_ACCOUNTS = 15
+NATIVE_CACHE_DIR = os.path.join('mods', 'configs', 'shotcaller', 'cache')
+NATIVE_CACHE_SCHEMA = 1
+NATIVE_REQUEST_SERIAL = 0
+NATIVE_ACTIVE_REQUESTS = {}
+NATIVE_INFLIGHT_BATCHES = set()
+NATIVE_TANKOPEDIA = {}
+NATIVE_TANKOPEDIA_REALM = None
+NATIVE_TANKOPEDIA_HANDLE = None
 LOOKUPS = {}
-LOOKUP_STATUS = {'sidecar_health': 'unknown', 'lookup_state': 'idle', 'version': None, 'last_health': 0.0, 'last_attempt_generation': None, 'inflight': False, 'pending': False}
-LOOKUP_COOLDOWN = 30.0
+LOOKUP_STATUS = {'lookup_state': 'idle', 'last_attempt_generation': None, 'inflight': False, 'pending': False, 'transport': 'native'}
 HOVER_ACTIVE = None
 PANEL = {'open': False, 'dbid': None, 'slot': None, 'generation': None,
          'fingerprint': None, 'suppressed_logged': False, 'opening': False}
@@ -307,7 +321,7 @@ def _panel_state(row):
         return 'error', result
     if LOOKUP_STATUS['inflight'] or LOOKUP_STATUS['pending'] or LOOKUP_STATUS['lookup_state'] in ('queued', 'running'):
         return 'pending', None
-    if LOOKUP_STATUS['sidecar_health'] == 'unavailable' or LOOKUP_STATUS['lookup_state'] in ('error', 'timeout'):
+    if LOOKUP_STATUS['lookup_state'] in ('error', 'timeout'):
         return 'error', None
     return 'missing', None
 
@@ -872,88 +886,342 @@ def get_lookup_snapshot(): return [_copy(value) for value in LOOKUPS.values()]
 def get_player_lookup(dbid): return _copy(LOOKUPS.get(dbid))
 def get_lookup_status(): return dict(LOOKUP_STATUS)
 
-def _http_json(path, payload=None, timeout=2.0):
-    url = SIDECAR + path
-    if payload is None:
-        request = urllib2.Request(url)
-    else:
-        data = json.dumps(payload, separators=(',', ':'))
-        request = urllib2.Request(url, data, {'Content-Type': 'application/json'})
-    handle = urllib2.urlopen(request, timeout=timeout)
-    try: return json.loads(handle.read())
-    finally: handle.close()
-
-def _lookup_worker(payload, expected_unit, expected_tier, expected_generation):
-    started = time.time(); players_count = len(payload['players'])
+def _native_dispatch(callback):
+    """Run a completion on the BigWorld script thread when available."""
     try:
-        now = time.time()
-        if LOOKUP_STATUS['sidecar_health'] != 'available' or now - LOOKUP_STATUS['last_health'] >= LOOKUP_COOLDOWN:
-            health = _http_json('/health', timeout=2.0)
-            LOOKUP_STATUS['last_health'] = now
-            if not health.get('ok') or health.get('service') != 'shotcaller': raise ValueError('health failed')
-            first = LOOKUP_STATUS['sidecar_health'] != 'available'
-            LOOKUP_STATUS['sidecar_health'] = 'available'; LOOKUP_STATUS['version'] = health.get('version')
-            if first: _log('sidecar available: version=' + str(LOOKUP_STATUS['version']))
-        LOOKUP_STATUS['lookup_state'] = 'running'
-        response = _http_json('/lookup/roster', payload, timeout=30.0)
-        reason = None
-        if CACHE['unit_id'] != expected_unit or response.get('unit_id') != expected_unit: reason = 'unit'
-        elif CACHE['tier'] != expected_tier or response.get('tier') != expected_tier: reason = 'tier'
-        elif CACHE['generation'] != expected_generation or response.get('generation') != expected_generation: reason = 'generation'
-        if reason is not None:
-            LOOKUP_STATUS['lookup_state'] = 'idle'; _log('stale lookup response discarded: reason=' + reason); return
-        players = response.get('players', [])
-        for player in players:
-            dbid = player.get('dbid')
-            if dbid is None: continue
-            LOOKUPS[dbid] = dict(player)
-            status = player.get('status'); name = player.get('name')
-            if status == 'ok': _log('player vehicles cached: dbID=%s name=%s vehicles=%s' % (dbid, name, len(player.get('vehicles', []))))
-            elif status == 'no_vehicle_history': _log('player vehicle history empty: dbID=%s name=%s' % (dbid, name))
-            else: _log('player lookup failed: dbID=%s status=%s' % (dbid, status))
-        LOOKUP_STATUS['lookup_state'] = 'complete'
-        _log('sidecar roster lookup complete: players=%s tier=%s generation=%s seconds=%.2f' % (len(players), expected_tier, expected_generation, time.time() - started))
-    except socket.timeout:
-        LOOKUP_STATUS['lookup_state'] = 'timeout'
-        _log('sidecar roster lookup timed out: players=%s tier=%s generation=%s' % (players_count, expected_tier, expected_generation))
-    except urllib2.URLError as error:
-        if isinstance(getattr(error, 'reason', None), socket.timeout):
-            LOOKUP_STATUS['lookup_state'] = 'timeout'
-            _log('sidecar roster lookup timed out: players=%s tier=%s generation=%s' % (players_count, expected_tier, expected_generation))
-        elif LOOKUP_STATUS['sidecar_health'] != 'available':
-            LOOKUP_STATUS['sidecar_health'] = 'unavailable'; LOOKUP_STATUS['last_health'] = time.time(); _log('sidecar unavailable')
-        else:
-            LOOKUP_STATUS['lookup_state'] = 'error'; _log('sidecar roster lookup transport error: URLError')
+        import BigWorld
+        scheduler = getattr(BigWorld, 'callback', None)
+        if callable(scheduler):
+            scheduler(0.0, callback)
+            return
+    except Exception:
+        pass
+    callback()
+
+def _native_error(category, http_status=None, body=None):
+    outcome = {'status': 'error', 'category': category, 'http_status': http_status,
+               'body_returned': body is not None}
+    if body is not None:
+        outcome['body_prefix'] = _text(body, 200)
+    return outcome
+
+def _native_exception_category(error):
+    """Classify without leaking the request URL, credentials, or response body."""
+    if isinstance(error, socket.timeout): return 'timeout'
+    if isinstance(error, urllib2.HTTPError): return 'http'
+    if isinstance(error, urllib2.URLError):
+        reason = getattr(error, 'reason', None)
+        if isinstance(reason, socket.timeout): return 'timeout'
+        text = str(reason).lower()
+        if 'certificate' in text or 'ssl' in text or 'tls' in text: return 'tls'
+        if 'getaddrinfo' in text or 'name or service not known' in text or 'host not found' in text or 'no such host' in text: return 'dns'
+        return 'network'
+    text = str(error).lower()
+    if 'certificate' in text or 'ssl' in text or 'tls' in text: return 'tls'
+    return 'unknown'
+
+def request_json(url, callback, errback=None, timeout=10.0):
+    """Issue one HTTPS JSON GET through WoT's audited async fetchURL service.
+
+    The returned handle can be cancelled logically. BigWorld.fetchURL itself has
+    no audited cancellation API, so a late response is ignored after cancel.
+    Completion is always scheduled back through BigWorld.callback when present.
+    """
+    global NATIVE_REQUEST_SERIAL
+    NATIVE_REQUEST_SERIAL += 1
+    token = NATIVE_REQUEST_SERIAL
+    handle = {'token': token, 'cancelled': False, 'done': False, 'started': time.time()}
+    NATIVE_ACTIVE_REQUESTS[token] = handle
+
+    def finish_success(data, status):
+        if handle['done'] or handle['cancelled']: return
+        handle['done'] = True; NATIVE_ACTIVE_REQUESTS.pop(token, None)
+        callback(data, {'status': 'success', 'http_status': status, 'seconds': time.time() - handle['started']})
+
+    def finish_error(outcome):
+        if handle['done'] or handle['cancelled']: return
+        handle['done'] = True; NATIVE_ACTIVE_REQUESTS.pop(token, None)
+        if errback is not None: errback(outcome)
+
+    def receive(*args):
+        # Client source uses response.responseCode and response.body in its own
+        # BigWorld.fetchURL callbacks (uilogging/core/handler.py).
+        response = args[0] if len(args) == 1 else None
+        status = getattr(response, 'responseCode', None)
+        body = getattr(response, 'body', None)
+        try:
+            body_length = len(body.encode('utf-8')) if isinstance(body, unicode) else len(body or '')
+        except Exception:
+            body_length = -1
+        def process():
+            if handle['cancelled'] or handle['done']: return
+            if len(args) != 1 or response is None:
+                outcome = _native_error('callback'); outcome.update({'callback_args': len(args), 'callback_types': ','.join(type(value).__name__ for value in args), 'body_type': type(body).__name__, 'body_bytes': body_length}); finish_error(outcome)
+                return
+            if status is None or status <= 0:
+                finish_error(_native_error('network', status, body))
+                return
+            if status < 200 or status >= 300:
+                finish_error(_native_error('http', status, body))
+                return
+            try:
+                payload = json.loads(body)
+            except (TypeError, ValueError):
+                finish_error(_native_error('invalid_json', status, body))
+                return
+            if not isinstance(payload, dict):
+                finish_error(_native_error('invalid_json', status, body))
+                return
+            if payload.get('status') != 'ok':
+                finish_error(_native_error('wg_api', status, body))
+                return
+            finish_success(payload, status)
+        _native_dispatch(process)
+
+    try:
+        import BigWorld
+        fetch = getattr(BigWorld, 'fetchURL', None)
+        if not callable(fetch): raise RuntimeError('BigWorld.fetchURL unavailable')
+        # Exact argument order is verified from gui/clientgw/factory.py in the
+        # 2.3.1.0 client: url, callback, headers, timeout, method, postData.
+        fetch(url, receive, {}, float(timeout), 'GET', '')
     except Exception as error:
-        if LOOKUP_STATUS['sidecar_health'] != 'available':
-            LOOKUP_STATUS['sidecar_health'] = 'unavailable'; LOOKUP_STATUS['last_health'] = time.time(); _log('sidecar unavailable')
+        category = _native_exception_category(error)
+        _native_dispatch(lambda: finish_error(_native_error(category)))
+    return handle
+
+def cancel_native_request(handle):
+    if isinstance(handle, dict):
+        handle['cancelled'] = True
+        NATIVE_ACTIVE_REQUESTS.pop(handle.get('token'), None)
+
+def _cancel_native_requests():
+    for handle in list(NATIVE_ACTIVE_REQUESTS.values()): cancel_native_request(handle)
+
+def _native_realm():
+    realm = NATIVE_DEFAULT_REALM
+    try:
+        from constants import CURRENT_REALM
+        candidate = str(CURRENT_REALM).upper()
+        if candidate in NATIVE_REALMS: realm = candidate
+    except Exception: pass
+    return realm
+
+def _native_url(realm, path, params):
+    if not NATIVE_WG_APP_ID: return None
+    query = dict(params); query['application_id'] = NATIVE_WG_APP_ID
+    return NATIVE_REALMS[realm] + '/wot/' + path + '/?' + urllib.urlencode(query)
+
+def _native_cache_path(realm, dbid, tier):
+    return os.path.join(NATIVE_CACHE_DIR, 'player_%s_%s_tier%s.json' % (realm.lower(), int(dbid), int(tier)))
+
+def _native_read_cache(realm, dbid, tier):
+    try:
+        data = json.load(open(_native_cache_path(realm, dbid, tier), 'rb'))
+        if data.get('schema') != NATIVE_CACHE_SCHEMA or data.get('realm') != realm or not isinstance(data.get('result'), dict): return None
+        return data
+    except Exception: return None
+
+def _native_atomic_write(path, data):
+    try:
+        directory = os.path.dirname(path)
+        if not os.path.isdir(directory): os.makedirs(directory)
+        temporary = path + '.tmp'
+        handle = open(temporary, 'wb')
+        try:
+            handle.write(json.dumps(data, separators=(',', ':'), ensure_ascii=True)); handle.flush()
+            try: os.fsync(handle.fileno())
+            except Exception: pass
+        finally: handle.close()
+        try:
+            import ctypes
+            if not ctypes.windll.kernel32.MoveFileExW(unicode(temporary), unicode(path), 0x1 | 0x8): raise OSError('MoveFileExW failed')
+        except Exception:
+            if os.path.exists(path): os.remove(path)
+            os.rename(temporary, path)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(path + '.tmp'): os.remove(path + '.tmp')
+        except Exception: pass
+        return False
+
+def _native_write_player_cache(realm, dbid, tier, result):
+    if _native_atomic_write(_native_cache_path(realm, dbid, tier), {'schema': NATIVE_CACHE_SCHEMA, 'realm': realm, 'dbid': int(dbid), 'tier': int(tier), 'fetched_at': time.time(), 'result': result}): _native_prune_cache()
+
+def _native_prune_cache():
+    """Bound public player-history retention without touching filter settings."""
+    try:
+        files = [os.path.join(NATIVE_CACHE_DIR, name) for name in os.listdir(NATIVE_CACHE_DIR) if name.startswith('player_') and name.endswith('.json')]
+        files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        for path in files[120:]: os.remove(path)
+    except Exception: pass
+
+def _native_tankopedia_path(realm): return os.path.join(NATIVE_CACHE_DIR, 'tankopedia_%s.json' % realm.lower())
+
+def _native_load_tankopedia_cache(realm):
+    try:
+        data = json.load(open(_native_tankopedia_path(realm), 'rb'))
+        if data.get('schema') != NATIVE_CACHE_SCHEMA or data.get('realm') != realm or not isinstance(data.get('tanks'), dict): return None
+        if time.time() - float(data.get('fetched_at', 0)) > NATIVE_CACHE_TTL: return None
+        return dict((int(key), value) for key, value in data['tanks'].iteritems())
+    except Exception: return None
+
+def _native_write_tankopedia_cache(realm, tanks):
+    encoded = dict((str(key), value) for key, value in tanks.iteritems())
+    _native_atomic_write(_native_tankopedia_path(realm), {'schema': NATIVE_CACHE_SCHEMA, 'realm': realm, 'fetched_at': time.time(), 'tanks': encoded})
+
+def _native_battles(record):
+    try: return max(0, int((record.get('all') or {}).get('battles', 0)))
+    except (TypeError, ValueError): return 0
+
+def _native_battles_present(record):
+    try:
+        all_stats = record.get('all') or {}
+        return 'battles' in all_stats and _int(all_stats.get('battles')) is not None
+    except Exception: return False
+
+def _native_result(player, records, tankopedia, tier):
+    result = {'dbid': player['dbid'], 'name': player['name'], 'status': 'api_error', 'vehicles': []}
+    if records is None:
+        result['status'] = 'no_account'; return result
+    vehicles = []
+    for record in records:
+        try: tank_id = int(record.get('tank_id', 0))
+        except (TypeError, ValueError): continue
+        tank = tankopedia.get(tank_id)
+        if not tank or _int(tank.get('tier')) != tier: continue
+        vehicles.append({'tank_id': tank_id, 'name': tank.get('name') or 'Unknown', 'tier': tier,
+                         'type': tank.get('type') or 'unknown', 'battles': _native_battles(record),
+                         'wins': _int((record.get('all') or {}).get('wins')) or 0})
+    vehicles.sort(key=lambda item: (-item['battles'], item['name']))
+    result['vehicles'] = vehicles; result['status'] = 'ok' if vehicles else 'no_vehicle_history'
+    return result
+
+def _native_lookup_key(realm, tier=None, rows=None):
+    if rows is None: rows = CACHE['rows'].values()
+    dbids = sorted(set(_int(row.get('dbid')) for row in rows if _int(row.get('dbid')) is not None and _int(row.get('dbid')) > 0))
+    return (ROOM_CONTEXT, CACHE['unit_id'], realm, CACHE['tier'] if tier is None else tier, tuple(dbids))
+
+def _native_key_log(key):
+    return 'context=%s unit=%s realm=%s tier=%s accounts=%s' % (key[0], key[1], key[2], key[3], len(key[4]))
+
+def _native_is_stale(lookup_key):
+    if not is_supported_room_context() or any(row.get('in_battle') for row in CACHE['rows'].values()): return True
+    return _native_lookup_key(lookup_key[2]) != lookup_key
+
+def _native_finish(players, realm, tier, lookup_key, started, results, stale_fallback=None, reason=None):
+    NATIVE_INFLIGHT_BATCHES.discard(lookup_key); LOOKUP_STATUS['inflight'] = False
+    if _native_is_stale(lookup_key):
+        active_key = _native_lookup_key(realm); LOOKUP_STATUS['lookup_state'] = 'idle'
+        _log('native response stale: requestedKey=%s activeKey=%s' % (_native_key_log(lookup_key), _native_key_log(active_key)))
+        current_rows = [CACHE['rows'][dbid] for dbid in CACHE['order'] if dbid in CACHE['rows']]
+        if current_rows and is_supported_room_context() and not any(row.get('in_battle') for row in current_rows):
+            _log('native replacement lookup queued: players=%s tier=%s' % (len(current_rows), CACHE['tier']))
+            _queue_lookup(current_rows)
+        _schedule_panel_refresh(); return
+    if CACHE['generation'] != LOOKUP_STATUS.get('last_attempt_generation'):
+        _log('native stale response accepted: reason=lookup identity unchanged')
+    fallback_count = 0
+    for player in players:
+        dbid = player['dbid']; result = results.get(dbid)
+        if result is None and stale_fallback and dbid in stale_fallback:
+            result = dict(stale_fallback[dbid]); fallback_count += 1
+        if result is None: result = {'dbid': dbid, 'name': player['name'], 'status': 'api_error', 'vehicles': []}
+        LOOKUPS[dbid] = result
+    if fallback_count: _log('native stale cache fallback: players=%s reason=%s' % (fallback_count, reason or 'transport'))
+    LOOKUP_STATUS['lookup_state'] = 'complete' if not reason else 'error'
+    _log('native lookup complete: players=%s tier=%s generation=%s seconds=%.2f' % (len(players), tier, CACHE['generation'], time.time() - started))
+    _schedule_panel_refresh()
+    if LOOKUP_STATUS['pending']:
+        LOOKUP_STATUS['pending'] = False; _queue_lookup([CACHE['rows'][dbid] for dbid in CACHE['order'] if dbid in CACHE['rows']])
+
+def _native_local_tankopedia():
+    tanks = {}
+    try:
+        for level in ('6', '8', '10'):
+            for item in (_build_vehicle_catalog() or {}).get(level, []):
+                tanks[_int(item.get('id'))] = {'name': item.get('name'), 'tier': _int(item.get('tier')), 'type': item.get('type')}
+    except Exception: pass
+    return dict((key, value) for key, value in tanks.iteritems() if key is not None)
+
+def _native_lookup(players, realm, tier, lookup_key):
+    global NATIVE_TANKOPEDIA, NATIVE_TANKOPEDIA_REALM, NATIVE_TANKOPEDIA_HANDLE
+    started = time.time(); cache_hits = {}; stale = {}; misses = []
+    for player in players:
+        cached = _native_read_cache(realm, player['dbid'], tier)
+        if cached and time.time() - float(cached.get('fetched_at', 0)) < NATIVE_CACHE_TTL: cache_hits[player['dbid']] = dict(cached['result'])
         else:
-            LOOKUP_STATUS['lookup_state'] = 'error'; _log('sidecar roster lookup transport error: ' + type(error).__name__)
-    finally:
-        LOOKUP_STATUS['inflight'] = False
-        _schedule_panel_refresh()
-        if LOOKUP_STATUS['pending']:
-            LOOKUP_STATUS['pending'] = False
-            _queue_lookup([CACHE['rows'][dbid] for dbid in CACHE['order'] if dbid in CACHE['rows']])
+            misses.append(player)
+            if cached: stale[player['dbid']] = dict(cached['result'])
+    if cache_hits: _log('native cache hit: players=%s' % len(cache_hits))
+    if not misses:
+        _native_finish(players, realm, tier, lookup_key, started, cache_hits); return
+    def request_stats(tankopedia):
+        account_ids = ','.join(str(player['dbid']) for player in misses)
+        url = _native_url(realm, 'tanks/stats', {'account_id': account_ids, 'fields': 'tank_id,all.battles,all.wins'})
+        _log('native WG request started: endpoint=tanks/stats accounts=%s realm=%s' % (len(misses), realm))
+        def success(payload, meta):
+            data = payload.get('data') or {}; results = dict(cache_hits); vehicle_count = 0; with_battles = 0; zero_battles = 0
+            for player in misses:
+                records = data.get(str(player['dbid']))
+                result = _native_result(player, records, tankopedia, tier); results[player['dbid']] = result
+                vehicle_count += len(result['vehicles'])
+                normalized_ids = set(vehicle['tank_id'] for vehicle in result['vehicles'])
+                with_battles += sum(1 for record in (records or []) if _int(record.get('tank_id')) in normalized_ids and _native_battles_present(record))
+                zero_battles += sum(1 for vehicle in result['vehicles'] if vehicle['battles'] == 0)
+                _native_write_player_cache(realm, player['dbid'], tier, result)
+            _log('native WG request complete: status=%s seconds=%.2f' % (meta['http_status'], meta['seconds']))
+            _log('native WG response parsed: players=%s vehicles=%s withBattles=%s zeroBattles=%s' % (len(misses), vehicle_count, with_battles, zero_battles))
+            _native_finish(players, realm, tier, lookup_key, started, results)
+        def failure(outcome):
+            _log('native WG request failed: category=%s responseCode=%s' % (outcome.get('category'), outcome.get('http_status')))
+            if outcome.get('category') == 'callback': _log('native callback diagnostics: args=%s types=%s' % (outcome.get('callback_args'), outcome.get('callback_types')))
+            _native_finish(players, realm, tier, lookup_key, started, dict(cache_hits), stale, outcome.get('category'))
+        request_json(url, success, failure, timeout=15.0)
+    if NATIVE_TANKOPEDIA and NATIVE_TANKOPEDIA_REALM == realm:
+        request_stats(NATIVE_TANKOPEDIA); return
+    cached_tanks = _native_load_tankopedia_cache(realm)
+    if cached_tanks:
+        NATIVE_TANKOPEDIA = cached_tanks; NATIVE_TANKOPEDIA_REALM = realm; request_stats(cached_tanks); return
+    url = _native_url(realm, 'encyclopedia/vehicles', {'fields': 'tank_id,name,tier,type'})
+    _log('native WG request started: endpoint=encyclopedia/vehicles realm=%s' % realm)
+    def tanks_success(payload, meta):
+        global NATIVE_TANKOPEDIA, NATIVE_TANKOPEDIA_REALM, NATIVE_TANKOPEDIA_HANDLE
+        NATIVE_TANKOPEDIA_HANDLE = None; raw = payload.get('data') or {}; tanks = {}
+        for key, tank in raw.iteritems():
+            try: tanks[int(key)] = {'name': tank.get('name'), 'tier': _int(tank.get('tier')), 'type': tank.get('type')}
+            except Exception: pass
+        NATIVE_TANKOPEDIA = tanks; NATIVE_TANKOPEDIA_REALM = realm; _native_write_tankopedia_cache(realm, tanks)
+        _log('native WG request complete: endpoint=encyclopedia/vehicles status=%s seconds=%.2f tanks=%s' % (meta['http_status'], meta['seconds'], len(tanks))); request_stats(tanks)
+    def tanks_failure(outcome):
+        global NATIVE_TANKOPEDIA_HANDLE
+        NATIVE_TANKOPEDIA_HANDLE = None; local_tanks = _native_local_tankopedia()
+        if local_tanks:
+            _log('native tankopedia fallback: source=local catalog tanks=%s' % len(local_tanks)); request_stats(local_tanks); return
+        _log('native tankopedia unavailable: category=' + str(outcome.get('category')))
+        _native_finish(players, realm, tier, lookup_key, started, dict(cache_hits), stale, outcome.get('category'))
+    NATIVE_TANKOPEDIA_HANDLE = request_json(url, tanks_success, tanks_failure, timeout=15.0)
 
 def _queue_lookup(rows, force=False):
     if not is_supported_room_context() or not rows or CACHE['tier'] not in (6, 8, 10) or CACHE['unit_id'] is None: return
-    if any(row.get('in_battle') for row in rows):
-        _log('ShotCaller disabled in battle context'); return
-    if LOOKUP_STATUS['inflight']:
-        LOOKUP_STATUS['pending'] = True; return
-    players = []
+    if any(row.get('in_battle') for row in rows): _log('ShotCaller disabled in battle context'); return
+    if LOOKUP_STATUS['inflight']: LOOKUP_STATUS['pending'] = True; return
+    players = []; seen = set()
     for row in rows:
-        if force or row['dbid'] not in LOOKUPS: players.append({'dbid': row['dbid'], 'name': row['name'] or ''})
+        dbid = _int(row.get('dbid'))
+        if dbid is None or dbid <= 0 or dbid in seen or (not force and dbid in LOOKUPS): continue
+        seen.add(dbid); players.append({'dbid': dbid, 'name': row.get('name') or ''})
     if not players: return
-    if LOOKUP_STATUS['sidecar_health'] == 'unavailable' and LOOKUP_STATUS['last_attempt_generation'] == CACHE['generation'] and time.time() - LOOKUP_STATUS['last_health'] < LOOKUP_COOLDOWN: return
-    payload = {'region': 'na', 'tier': CACHE['tier'], 'unit_id': CACHE['unit_id'], 'generation': CACHE['generation'], 'players': players[:15]}
-    LOOKUP_STATUS['inflight'] = True; LOOKUP_STATUS['lookup_state'] = 'queued'; LOOKUP_STATUS['last_attempt_generation'] = CACHE['generation']
-    if ROOM_CONTEXT == ROOM_CONTEXT_PLATOON:
-        _log('platoon lookup queued: players=%s tier=%s generation=%s' % (len(players), CACHE['tier'], CACHE['generation']))
-    _log('sidecar roster lookup queued: players=%s tier=%s generation=%s' % (len(players), CACHE['tier'], CACHE['generation']))
-    thread = threading.Thread(target=_lookup_worker, args=(payload, CACHE['unit_id'], CACHE['tier'], CACHE['generation']))
-    thread.setDaemon(True); thread.start()
+    if not NATIVE_WG_APP_ID:
+        LOOKUP_STATUS['lookup_state'] = 'error'; _log('native lookup unavailable: reason=application ID not configured'); _schedule_panel_refresh(); return
+    realm = _native_realm(); host = NATIVE_REALMS[realm].split('//', 1)[1]
+    _log('native WG realm resolved: realm=%s host=%s' % (realm, host))
+    players = players[:NATIVE_MAX_BATCH_ACCOUNTS]; key = _native_lookup_key(realm, CACHE['tier'])
+    if key in NATIVE_INFLIGHT_BATCHES: return
+    NATIVE_INFLIGHT_BATCHES.add(key); LOOKUP_STATUS['inflight'] = True; LOOKUP_STATUS['lookup_state'] = 'queued'; LOOKUP_STATUS['last_attempt_generation'] = CACHE['generation']
+    _log('native roster lookup queued: players=%s tier=%s generation=%s' % (len(players), CACHE['tier'], CACHE['generation']))
+    _native_lookup(players, realm, CACHE['tier'], key)
 
 def _normalize(slot, index):
     player = _get(slot, 'player', {})
@@ -982,6 +1250,7 @@ def _print_initial(row):
 def clear_roster_cache(reason):
     """Central idempotent clear for exit, empty fallback, unit transition, unload."""
     global EMPTY_SNAPSHOTS, _pending_exit_token, HOVER_ACTIVE
+    _cancel_native_requests(); NATIVE_INFLIGHT_BATCHES.clear()
     if not CACHE['rows'] and not VOLUNTEERS:
         _close_panel(reason)
         EMPTY_SNAPSHOTS = 0; _pending_exit_token = None; return False
