@@ -1,34 +1,63 @@
-# Secrets / local config
+# Secrets / local configuration
 .env
 .env.*
 !.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
 
-# Local caller config
+# Local caller configuration and runtime state
 excluded_tanks.json
 roster.txt
-
-# Python cache / bytecode
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Project cache
+mods/configs/shotcaller/vehicle_filters.json
+logs/
+*.log
 .cache/
-
-# Test/temp files
-.tmp_cli_test/
+cache/
+runtime/
 tmp/
 temp/
 
-# Virtual environments
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Local Python environments
 .venv/
 venv/
 env/
 
-# IDE/editor
-.vscode/
-.idea/
+# Generated WoT mod artifacts (source and build scripts remain tracked)
+wot_mod/prototype_2_garage_hook/dist/
+wot_mod/prototype_2_garage_hook/build/
+wot_mod/prototype_2_garage_hook/staging/
+wot_mod/prototype_2_garage_hook/custom_ui/dist/
+wot_mod/prototype_2_garage_hook/flash_work/
+wot_mod/prototype_2_garage_hook/**/*.wotmod
 
-# OS junk
+# Local client references, extracted tooling, and reverse-engineering output
+.tmp_refs/
+.tools/
+reference/
+
+# IDE / editor
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# OS files
 .DS_Store
 Thumbs.db
+Desktop.ini
