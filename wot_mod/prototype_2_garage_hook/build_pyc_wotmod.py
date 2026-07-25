@@ -7,13 +7,15 @@ import sys
 import zipfile
 
 
-PACKAGE_NAME = 'shotcaller_0.0.24_detachment_exit_lifecycle_repair.wotmod'
+PACKAGE_NAME = 'shotcaller_0.0.58_vehicle_battle_counts.wotmod'
 PYC_ARCHIVE_PATH = 'res/scripts/client/gui/mods/mod_shotcaller.pyc'
+SWF_ARCHIVE_PATH = 'res/gui/flash/shotcaller/shotcallerVehicleWindow.swf'
+FILTER_SWF_ARCHIVE_PATH = 'res/gui/flash/shotcaller/shotcallerVehicleFilters.swf'
 META_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <root>
   <id>shotcaller</id>
-  <version>0.0.24</version>
-  <name>Shot-caller Detachment Exit Lifecycle Repair</name>
+  <version>0.0.58</version>
+  <name>Shot-caller Vehicle Battle Counts</name>
 </root>
 '''
 
@@ -22,8 +24,19 @@ def main():
     script_directory = os.path.dirname(os.path.abspath(__file__))
     source_path = os.path.join(script_directory, 'mod_shotcaller.py')
     pyc_path = os.path.join(script_directory, 'mod_shotcaller.pyc')
+    swf_path = os.path.join(script_directory, 'custom_ui', 'dist', 'shotcallerVehicleWindow.swf')
+    filter_swf_path = os.path.join(script_directory, 'custom_ui', 'dist', 'shotcallerVehicleFilters.swf')
     output_directory = os.path.join(script_directory, 'dist')
     output_path = os.path.join(output_directory, PACKAGE_NAME)
+
+    # This guards against reintroducing Python's local/global shadowing bug.
+    source_text = open(source_path, 'rb').read()
+    function_start = source_text.find(b'def _build_vehicle_catalog():')
+    function_end = source_text.find(b'\ndef get_vehicle_catalog_audit():', function_start)
+    function_text = source_text[function_start:function_end]
+    if function_start < 0 or b'global VEHICLE_CATALOG' not in function_text:
+        print('Catalog cache-scope check failed: _build_vehicle_catalog must declare global VEHICLE_CATALOG.')
+        return 1
 
     if not os.path.isfile(pyc_path):
         print('Missing mod_shotcaller.pyc. Compile mod_shotcaller.py with the WoT-compatible Python version first.')
@@ -33,12 +46,21 @@ def main():
         print('mod_shotcaller.pyc is older than mod_shotcaller.py. Compile mod_shotcaller.py with the WoT-compatible Python version first.')
         return 1
 
+    if not os.path.isfile(swf_path):
+        print('Missing custom_ui/dist/shotcallerVehicleWindow.swf. Compile the audited custom UI first.')
+        return 1
+    if not os.path.isfile(filter_swf_path):
+        print('Missing custom_ui/dist/shotcallerVehicleFilters.swf. Compile the filters UI first.')
+        return 1
+
     if not os.path.isdir(output_directory):
         os.makedirs(output_directory)
 
     with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_STORED) as archive:
         archive.writestr('meta.xml', META_XML)
         archive.write(pyc_path, PYC_ARCHIVE_PATH)
+        archive.write(swf_path, SWF_ARCHIVE_PATH)
+        archive.write(filter_swf_path, FILTER_SWF_ARCHIVE_PATH)
 
     print('Built {0}'.format(output_path))
     return 0

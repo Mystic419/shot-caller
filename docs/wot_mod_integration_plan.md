@@ -817,6 +817,236 @@ an exit. The probe logs hook origins/installation, supports transient
 Stronghold replacement cancellation, and clears only after an un-replaced,
 un-updated one-second stop confirmation.
 
+### Prototype 3O-repair validation and Prototype 4A
+
+Prototype 3O-repair is validated: base watcher origins were confirmed, hooks
+installed, Stronghold instances filtered, transient stop/start replacement
+cancelled, and a real detachment exit cleared the populated roster after one
+second while WoT remained open. The roster subsystem is now considered live
+and safe for a consumer.
+
+Prototype 4A introduces a localhost-only bridge to the existing modern backend.
+`python -m shot_caller.sidecar` binds to `127.0.0.1:37841`, exposes `GET
+/health` and validated `POST /lookup/roster`, and reuses WG client/tankopedia
+logic with a ten-minute successful per-player/tier cache. It returns all
+public-history vehicles at the requested tier, ordered by battles then name.
+The embedded mod uses background standard-library HTTP only, sends no client
+credentials/chat/battle data, rejects stale generation/unit responses, and
+keeps lookup results in memory. Public history is explicitly not proof of
+current garage ownership.
+
+### Prototype 4A result and timeout repair
+
+Prototype 4A proved the localhost trust boundary: the WoT mod queued a
+seven-player Tier VIII request and `/health` reported the sidecar available.
+The initial roster POST exceeded the embedded client's former five-second
+timeout, however, because the sidecar performed player histories sequentially.
+
+The 4A repair keeps sidecar health (`unknown`/`available`/`unavailable`) apart
+from lookup execution (`idle`/`queued`/`running`/`complete`/`timeout`/`error`).
+Health remains available after a POST timeout. The WoT background POST timeout
+is 30 seconds; all responses carry and are checked against unit ID, tier, and
+generation. The sidecar serves cache hits immediately and requests all cache
+miss DBIDs through the supported bounded-concurrency tank-stat path, loading
+tankopedia at most once per batch and preserving request order with per-player
+statuses. A direct API diagnostic confirmed that WG rejects the attempted
+comma-separated `account_id` format, while individual account requests succeed;
+the sidecar now logs that batch-level distinction and classified failures rather
+than silently returning seven `api_error` rows. A direct seven-player test
+completed successfully with all structured `ok` results.
+
+### Prototype 4A-repair validation and Prototype 4B
+
+Prototype 4A-repair was validated under WoT 2.3.1.0: the roster/watchers stayed
+stable, sidecar health reported version 0.0.26, vehicle history arrived in WoT
+memory (including a 55-vehicle Tier VIII result), and detachment exit cleared
+both roster and lookup caches.
+
+Prototype 4B is a read-only legacy Scaleform/DAAPI hover-target probe. It
+retains the validated bridge unchanged and dynamically limits inspection to
+Stronghold/Skirmish rally room, slot, member, mouse, and tooltip candidate
+methods directly owned by Stronghold-specific classes. Candidate methods log
+safe argument types once. When a slot/DBID is available, the existing cache
+produces deduplicated hover enter/exit logs with lookup state and cached vehicle
+count. No custom tooltip is rendered until this event path is confirmed.
+
+### Prototype 4B result and tooltip-request repair
+
+Prototype 4B was safe but ineffective: its direct Stronghold/rally hover scan
+installed zero hooks and therefore produced no row enter/exit event. The live
+room evidently routes mouse activity through the legacy tooltip request flow
+rather than a directly owned roster-renderer hover method.
+
+Prototype 4B-repair enumerates only tooltip-named candidates in the narrow
+Stronghold/rally/battle-room and shared legacy tooltip modules, logging direct
+ownership without object representations. It selects at most one direct
+Stronghold-specific request callback; if none exists, it selects at most one
+narrow shared legacy entry point. Safe scalar request values are correlated to
+the existing slot/DBID/vehicle cache, and no new lookup or tooltip content is
+introduced until the live callback is confirmed.
+
+### Prototype 4B-repair result and Prototype 4C
+
+Prototype 4B-repair found only `WindowLayer.TOOLTIP` in the queried Fortification
+module. It is a constant rather than a callable request route, and no roster
+tooltip callback fired during extensive live hovering. This supports the
+conclusion that the legacy Stronghold renderer owns hover behavior in
+ActionScript rather than exposing it through a useful Python callback.
+
+Prototype 4C disables the tooltip request scan and probes only the already
+validated `makeSlotsVOs` output. The reference client source shows
+`makeSlotsVOs` passes `_getSlotsData` to `as_setMembersS`; nested vehicle VOs
+include a native `tooltip` field for invalid/restricted vehicle state, while
+slot/player VOs do not document a general custom tooltip field. The live probe
+will log deduplicated top-level/nested schemas and safe candidate scalars from
+the actual 2.3.1.0 rows. It does not mutate VOs or apply a marker until a
+supported field/renderer contract is proven.
+
+### Prototype 4C result and selected-vehicle marker test
+
+Live screenshots established two native Stronghold roster hover zones: the
+player-name area displays full name and the selected-vehicle area displays
+`Player's vehicles`. Prototype 4C confirmed the nested live field
+`selectedVehicle.tooltip` exists and is normally `None`.
+
+Prototype 4D retains one concise schema confirmation and performs one local-row
+marker test before the `makeSlotsVOs` result is consumed. It sets
+`selectedVehicle.tooltip` only when the row is the authenticated user,
+vehicle/intCD/tier are valid, and the existing tooltip is empty. A non-empty
+native restriction tooltip is never overwritten. The result distinguishes
+whether the field controls normal vehicle hover (marker appears) or is ignored
+(the existing `Player's vehicles` tooltip remains), with no custom UI added.
+
+### First-slot marker repair
+
+The first marker test did not apply because the authenticated player was in the
+Volunteers panel, not an active Detachment Members slot. The marker logic was
+correctly non-invasive but did not test the field. The repair prefers an active
+local slot; otherwise it marks only the first eligible active roster row for
+the current roster generation, still requiring a valid tier, vehicle compact
+descriptor, and empty native tooltip field.
+
+### Prototype 4E result and Prototype 5A
+
+Prototype 4E applied the marker to slot 0, but hovering that exact vehicle
+still displayed the native `Player's vehicles` text. This proves the legacy
+Stronghold ActionScript renderer ignores `selectedVehicle.tooltip` for the
+normal vehicle hover. Tooltip-field scanning and all marker mutations stop
+here.
+
+Prototype 5A is the first real read-only panel. A per-row action cannot be
+injected safely because the Stronghold renderer exposes neither a usable
+Python hover callback nor a documented row-button contract. The selected
+fallback uses the existing legacy Scaleform `VIEW_ALIAS.SIMPLE_DIALOG` view
+with a fixed Shotcaller view name and `VIEW_SCOPE`; it needs no custom SWF.
+`Ctrl+Alt+V` opens the current cached-roster target, while
+`Ctrl+Alt+Left/Right` cycles targets.
+
+The panel reads only the in-memory sidecar cache and never requests WG data on
+open. It labels results as public Tier VI/VIII/X vehicle history rather than
+current ownership, shows lookup pending/error/empty states, and groups names by
+class after sorting by class then name. Its native close button and the fixed
+view destruction path close it for detachment exit, target removal, battle
+start, and mod unload. The initial build expected native dialog scrolling, but
+Prototype 5A-repair validation later proved the stock text body does not scroll.
+Known limitation: no per-row icon/button is present in this first panel.
+
+### Prototype 5A validation and navigation repair
+
+Prototype 5A rendered correctly, reused the seven-player cache without new
+sidecar/WG requests, grouped vehicle classes correctly, and preserved exit
+cleanup. Global `Ctrl+Alt+Left/Right` did not fire while the modal
+`simpleDialog` held keyboard focus, so keyboard cycling is retired.
+
+The repair switches the fixed-name panel to the native legacy Scaleform
+`buttonDialog`. Unlike `simpleDialog`, its Python callback preserves the button
+ID, allowing explicit Previous, Next, and Close controls. Previous/Next walk
+only populated roster entries and wrap in both directions. Because the native
+view destroys itself after every button click, navigation schedules exactly one
+controlled rebuild after destruction while retaining the selected DBID; no
+lookup is queued.
+
+The heading adds `Player <current> of <total>`. Display-name normalization
+removes all existing instances of the same `[CLAN]` token and then appends one,
+so the tag appears exactly once. A display fingerprint covers the selected
+DBID/slot, tier, roster position, normalized name, lookup state, and sorted
+vehicle identity/type/name data. Ready, frozen, battle-status (except entering
+battle), and commander-only changes therefore do not rebuild the panel, and a
+status-only suppression is logged at most once per panel session.
+
+### Prototype 5A-repair validation, 5B failure, and 0.0.35 recovery
+
+Live validation displayed the authenticated player's 55 cached Tier VIII
+vehicles and completed the first uncached lookup in approximately 3.00 seconds.
+Reopening reused the cache and lifecycle cleanup passed. The 55-entry screenshot
+also proved that the stock `buttonDialog` grows beyond the client viewport and
+does not expose a usable scrollbar.
+
+Prototype 5B / 0.0.34 is unsafe. Opening its custom
+`shotcallerVehiclePanel.swf` terminated the WoT process directly after the
+native `Loading window: alias=shotcallerVehiclePanel` line and Shotcaller's
+waiting-tier/opened lines. There was no Python traceback, normal shutdown, or
+mod-unload log. Python had returned from `loadView`, so the evidence indicates
+a native Scaleform/renderer fatal failure during SWF construction or population,
+not an ordinary mod-Python exception.
+
+Prototype 0.0.35 restores the validated native `buttonDialog` view. Its runtime
+does not register, instantiate, load, or reference the 0.0.34 custom alias or
+SWF, and its archive contains only `meta.xml` and `mod_shotcaller.pyc`.
+`Ctrl+Alt+V`, Previous/Next, cache-only navigation, stale-response protection,
+and all roster/lifecycle behavior remain on the proven generic path. The known
+55-vehicle overflow remains an accepted temporary limitation.
+
+Static analysis ranks the leading custom-SWF risks as: (1) a duplicate
+default-package `ButtonDialogUI` export already supplied by the stock
+`buttonDialog.swf`; (2) dynamic child/control creation in the derived dialog
+constructor before stock timeline population; (3) overridden layout/text hooks
+that can recurse through the inherited dialog/window layout contract; and (4)
+an unverified dynamically-created `ScrollBar`/`scrollTarget` relationship.
+Runtime `GroupedViewSettings`/Python-view/SWF linkage mismatch and reimported
+AS3 bytecode compatibility remain medium and low/unknown alternatives. Masks
+and vehicle-list length are not leading candidates because no mask was added and
+the process died before significant dynamic data was used.
+
+Installed known-working mod assets contrast with the failed design: Aslain uses
+the uniquely named `aslainMenu.swf`, Izeberg uses `modsSettingsWindow.swf`, and
+XVM uses context-specific `xvm_lobby*.swf` and `xvm_battle*.swf`. The failed
+artifact instead copied the stock dialog export/name and modified its lifecycle
+inside a newly registered alias. That structural difference is a useful risk
+signal, not proof from archive inspection; compilation, reimport,
+decompilation, and ZIP checks had all passed before the live crash.
+
+The minimum future custom-SWF experiment is deliberately separate from 0.0.35
+and opt-in only: one plain root `MovieClip`, one static timeline text field, a
+unique class/package and alias, and no `ButtonDialogUI` inheritance, Python
+callbacks, buttons, masks, scrolling, resizing, or dynamic data. Add features
+only after that loads and closes safely.
+
+### Prototype 0.0.36 safe vehicle-selection refresh
+
+The 0.0.35 fallback did not crash, but it demonstrated that the converter hook
+is observational rather than a complete lifecycle source. The first roster VO
+had no selected vehicle (`intCD=None`, level `0`), and no later `makeSlotsVOs`
+call occurred after T-832 became visible in the native Stronghold room. Thus
+Shotcaller had no valid tier and deliberately did not queue a lookup.
+
+The actual legacy rally path listens to `g_currentVehicle.onChanged` and calls
+`_updateMembersData`, which normally invokes `makeSlotsVOs`. The Stronghold
+room has the narrower `onUnitVehiclesChanged(dbID, vInfos)` callback; its
+native handler receives `vehTypeCD` and `vehLevel` and updates that slot. The
+repair hooks only this direct `StrongholdBattleRoom.__dict__` method, after the
+original return, and applies the compact descriptor/level only to the matching
+cached DBID. It preserves normal converter hooks and does not patch a shared
+lobby base class.
+
+The generic `buttonDialog` is still the only UI. Unknown tier displays `Select
+a Tier VI, VIII, or X vehicle.` with no lookup and no `Tier None` title. A
+valid tier queues the normal lookup and refreshes an open panel; same-tier
+selection reuses cache while a tier change invalidates tier-scoped results.
+Previous/Next are no-ops for a one-member roster, avoiding the stock dialog's
+otherwise unavoidable close/rebuild cycle. Non-draggable stock dialog behavior
+is an accepted temporary limitation.
+
 ### 3. Detachment detection
 
 Goal:
@@ -983,6 +1213,33 @@ Updated next step:
 
 ## Sources
 
+## Prototype 0.0.37 custom-window foundation
+
+The 0.0.34 crash ruled out reuse of the stock ButtonDialog implementation. Its
+last Python line was the view load request, with no Python traceback or normal
+shutdown; that remains evidence of a native/Scaleform failure rather than an
+ordinary mod exception. Prototype 0.0.37 therefore uses a unique root class,
+alias, and nested resource path: `shotcaller.ui.ShotcallerVehicleWindow`,
+`shotcallerVehicleWindow`, and
+`res/gui/flash/shotcaller/shotcallerVehicleWindow.swf` respectively.
+
+The registration pattern was checked against the working Aslain and Izeberg
+mods. Both register a `ViewSettings` with a dedicated `View` subclass, a unique
+SWF file name, `WindowLayer.OVERLAY`, and `ScopeTemplates.GLOBAL_SCOPE`.
+Shotcaller copies only that narrow registration convention. It does not use a
+`GroupedViewSettings`, `ButtonDialog`, `ButtonDialogUI`, stock dialog alias,
+or stock root export for its custom path.
+
+The Python view performs no data push until `_populate`, treats a missing Flash
+method as a population failure, disposes the custom view before one controlled
+generic fallback, and confirms that a requested view reaches population within
+one second. `USE_CUSTOM_VEHICLE_WINDOW` is the sole switch: false preserves the
+validated 0.0.36 built-in buttonDialog fallback. The initial SWF is deliberately
+plain and bounded: static root hierarchy, draggable title bar, close/navigation
+controls outside a masked vehicle viewport, and wheel/scrollbar handling inside
+that viewport. No claim of runtime safety is made until the native client test
+passes.
+
 External references used for this research:
 
 - Wargaming Modding Hub index: https://wgmods.dev/docs
@@ -1009,3 +1266,127 @@ Local project references:
 - `shot_caller/config.py`
 - `shot_caller/exclusions.py`
 - `shot_caller/tankopedia.py`
+
+## Prototype 0.0.38 IView contract repair
+
+The live 0.0.37 rejection, `[Scaleform] net.wg.infrastructure.interfaces.IView
+does not implemented`, occurred after the custom resource was loaded and before
+the Python fallback. This identifies the missing ActionScript DAAPI contract,
+not registration, alias, resource path, or Python population behavior.
+
+The exact 2.3.1.0 client definition in `lobby.swf` is `AbstractView extends
+AbstractViewMeta implements IView`. Extracted Aslain and Izeberg overlay roots
+follow the same pattern by extending `net.wg.infrastructure.base.AbstractView`
+and overriding `onPopulate` / `onDispose`. Prototype 0.0.38 changes only the
+Shotcaller root to that base and lifecycle; it retains its unique alias, root,
+and standalone layout, and does not inherit any stock dialog class.
+
+The Flex SDK does not ship Wargaming framework SWCs. A compile-only external
+contract records the superclass name and verified lifecycle signatures so the
+generated SWF links to the client class at runtime. It does not define `IView`,
+is not packaged, and cannot replace the real client framework. Static inspection
+must therefore show the root superclass as
+`net.wg.infrastructure.base.AbstractView`; the shipped archive remains only
+metadata, Python bytecode, and the custom SWF.
+
+## Prototype 0.0.39 persistent vehicle filters
+
+The first custom overlay is now runtime-validated: it is non-modal, draggable,
+scrollable, reloads safely, and closes safely on detachment exit. Prototype
+0.0.39 applies global presentation-only filters after the full cached sidecar
+result, preserving complete lookup data and avoiding any request when filters
+change. Stable numeric vehicle IDs are persisted by tier in the external,
+versioned `mods/configs/shotcaller/vehicle_filters.json` file.
+
+The settings surface is a separate unique Scaleform `AbstractView` overlay.
+Configuration failure is isolated from the history-view fallback. Missing or
+malformed configuration uses the empty built-in defaults, and JSON writes use a
+temporary file with replacement where practical. Both runtime SWFs are compiled
+against the audited AbstractView contract and are the only non-Python resources
+in the package.
+
+## Prototype 0.0.42 complete filter catalog and controls
+
+The 0.0.41 callback bridge is validated for Close, Settings, Cancel, and view
+lifecycle. 0.0.42 repairs the independent catalog contract: the settings
+payload is sourced from the local client vehicle-definition list rather than a
+player history, garage, roster, or API result. All VI/VIII/X catalogs are sent
+once, allowing Flash to switch tiers, search names, toggle classes, scroll, and
+change checkbox working state without callback traffic. Save returns the three
+complete hidden-ID sets to Python; configuration remains presentation-only and
+does not request sidecar data.
+
+## Prototype 0.0.43 vehicle catalog iteration repair
+
+Live 0.0.42 confirmed the Flash payload path but exposed the client API error:
+`g_list.getList()` requires a nation argument. The 2.3.1.0 customization
+service provides the verified iteration contract:
+`nations.INDICES.itervalues()` then
+`vehicles.g_list.getList(nationID).itervalues()`. The catalog builder now uses
+this contract, descriptor compact descriptors, localized descriptor names, and
+supported descriptor vehicle types. It reports guarded call diagnostics and
+does not label a failed extraction as a complete catalog.
+
+## Prototype 0.0.44 vehicle catalog cache scope repair
+
+The repaired nation loop reached client `VehicleItem` values, then failed only
+because the builder assigned `VEHICLE_CATALOG` without declaring it global.
+The cache is now atomic: `None` until a fully validated local catalog exists,
+then one module-level assignment. A failed build retains `None` and a later
+Settings action retries, while a successful second open reuses the completed
+catalog. No Scaleform or roster/sidecar behavior changes in this repair.
+
+## Prototype 0.0.45 vehicle class resolution repair
+
+The 2.3.1 live wrapper data showed that `VehicleItem.type` and `typeName` are
+both `None`. Class resolution therefore moves to the proven full-definition
+path: `vehicles.getVehicleType(item.compactDescr)` followed by
+`vehicles.getVehicleClassFromVehicleType(...)`. Only the five normal vehicle
+class tags are emitted; all other entries and individual resolution failures
+are counted and safely skipped.
+
+## Prototype 0.0.46 filter payload contract repair
+
+The complete live client catalog exposed a separate schema mismatch at the
+Scaleform boundary. The wire format is now versioned, compact JSON with
+camel-case schema keys and a record `class` field. The ActionScript receiver
+logs bounded raw type, length, parse, schema, tier-array, and accepted/skipped
+record diagnostics through its dedicated DAAPI callback, so any remaining
+bridge truncation or coercion issue is observable without logging full payloads.
+
+## Prototype 0.0.47 Scaleform JSON decoder repair
+
+Live diagnostics proved the JSON bridge preserves the full payload but the
+Scaleform runtime lacks the global `JSON` implementation. The settings data
+path now uses native DAAPI arrays: begin metadata, three tier catalogs, three
+hidden-ID arrays, and finish. The view validates and normalizes those primitive
+arrays, retaining all catalog and filter behavior while removing the unavailable
+JSON parser dependency.
+
+## Prototype 0.0.48 filter state and duplicate grouping repair
+
+Display rows are now grouped by tier/localized name/class, not by compact
+descriptor alone. Each group retains all its stable IDs and the SWF stores
+hidden state in per-tier ID maps independent of search, scrolling, class
+browsing, and current tab. Save uses three explicit sorted numeric arrays;
+Python persists them and refreshes only the existing cached history panel.
+# Prototype 0.0.52 — intentional regular-platoon support
+
+The shared legacy rally converter is no longer treated as sufficient context evidence. The mod checks the current prebattle type and accepts only `PREBATTLE_TYPE.SQUAD` for a regular random platoon; Stronghold remains identified by `StrongholdVehiclesWatcher`. Platoon lifecycle is narrowly observed on `gui.prb_control.entities.random.squad.entity.RandomSquadEntity` (`init`, `fini`, and unit vehicle callbacks), without broadening the Stronghold watcher patch or touching `BaseVehiclesWatcher` for platoon handling.
+
+For platoons, a lookup tier is resolved only when all occupied selected vehicles report one matching supported tier (6, 8, or 10). Mixed/unknown/unsupported selections do not request the sidecar. The history HTML separator after `Vehicles shown` is retained as the fixed-header/body split, while the SWF viewport now starts at y=154 after a y=138 header, a 16 px gap; the first body line is `Heavy` with no blank leading line.
+# Prototype 0.0.53 — authoritative platoon roster source
+
+The regular platoon’s audited source is the random squad entity’s unit snapshot: `getUnit(safe=True)` plus `getSlotsIterator(unitMgrID, unit)`. Slot entries provide the player wrapper and selected vehicle entry used for normalized DBID rows. Rebuilds are scheduled after `init`, roster, player, ready, and vehicle events; retries are bounded to 0, 250, 750, and 1500 ms and are invalidated on `fini`. The existing `makeSlotsVOs` result remains accepted only while the explicit random-platoon context is active, preserving the successful 0.0.51 fallback path.
+# Prototype 0.0.54 — field-aware platoon merging
+
+The entity slot snapshot is intentionally treated as sparse: `None`, zero, and empty values from that source are “missing”, not a deselection. Only an explicit converter slot update may clear a selected vehicle. For a matching DBID, entity membership/slot/commander fields are merged with existing converter vehicle, tier, ready, status, name, clan, and rating fields. This prevents a delayed entity rebuild from changing Tier VIII to unknown and incorrectly invalidating an in-flight lookup.
+# Prototype 0.0.55 — text/rendering and invalid-tier UX
+
+The first heading clipping was a TextField/scrollRect glyph-edge issue: headings were formatted HTML in the same scrolling TextField as vehicle names. The history body now renders heading fields separately, with `text` (not `htmlText`), `TextFieldAutoSize.NONE`, no wrapping, `_sans`, `embedFonts=false`, an x=24 local inset, and a clipped viewport starting at x=0. `as_setMessageState(contextLabel, titleLine, detailLine)` provides the unsupported/mixed-tier state without another SWF or sidecar request.
+# Prototype 0.0.56 — no heading sentinels
+
+The 0.0.55 leak was caused by the former multiline heading delimiter flowing into the vehicle list when its ActionScript recognition path did not match. The history bridge now sends native DAAPI calls for typed heading and vehicle rows; no heading inference or marker parsing remains. A separate `resolved_tier` preserves a real Tier V selection while `tier` remains the supported lookup tier (`None`), allowing a correct unsupported-tier message without a request.
+# Prototype 0.0.57 — state classifier
+
+`_classify_history_state(roster)` distinguishes a real selected but unsupported tier from incomplete and mixed selection. `_apply` computes both `resolved_tier` and the supported lookup tier from merged rows, after source-precedence reconciliation, preventing sparse entity data from collapsing Tier V to unknown. Informational state uses the existing SWF and clears row/scroll state; no sidecar request is permitted without a supported lookup tier.

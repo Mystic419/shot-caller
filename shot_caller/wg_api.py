@@ -137,7 +137,7 @@ class WargamingAPIClient:
             "tanks/stats",
             {
                 "account_id": account_id,
-                "fields": "tank_id,all.battles",
+                "fields": "tank_id,all.battles,all.wins",
             },
         )
         return data.get(str(account_id), []) or []
@@ -151,7 +151,7 @@ class WargamingAPIClient:
             "tanks/stats",
             {
                 "account_id": joined_account_ids,
-                "fields": "tank_id,all.battles",
+                "fields": "tank_id,all.battles,all.wins",
             },
         )
         return {
