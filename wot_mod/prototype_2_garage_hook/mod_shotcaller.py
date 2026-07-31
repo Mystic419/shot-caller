@@ -1,4 +1,5 @@
 """Prototype 5A-repair: safe generic vehicle-selection refresh."""
+# -*- coding: utf-8 -*-
 import cgi
 import codecs
 import json
@@ -46,10 +47,27 @@ NATIVE_DEFAULT_REALM = 'NA'
 NATIVE_CACHE_TTL = 6 * 60 * 60
 NATIVE_MAX_BATCH_ACCOUNTS = 15
 NATIVE_CACHE_DIR = os.path.join('mods', 'configs', 'shotcaller', 'cache')
-NATIVE_CACHE_SCHEMA = 1
+NATIVE_CACHE_SCHEMA = 2
+CLAN_EMBLEM_TTL = 24 * 60 * 60
+CLAN_EMBLEM_MAX_BYTES = 512 * 1024
+CLAN_EMBLEM_DIR = os.path.join(NATIVE_CACHE_DIR, 'emblems')
+LOCAL_CLAN_WATERMARK = {'account_id': None, 'realm': None, 'clan_id': None, 'tag': '', 'path': None, 'fetched_at': 0}
+LOCAL_CLAN_RESOLUTION_PENDING = False
+CLAN_RESOLUTION_STATE = 'pending_account'
+CLAN_RETRY_ATTEMPT = 0
+CLAN_RETRY_TOKEN = 0
+CLAN_MAX_RETRIES = 12
+CLAN_ACCOUNTINFO_FIELDS = 'clan_id'
+CLAN_INFO_FIELDS = 'clan_id,tag,name,emblems'
+ACCOUNT_LIFECYCLE_ORIGINALS = {}
+LOCAL_CONFIRMED_TIER = None
+INSTALL_RETRY_ATTEMPT = 0
+INSTALL_COMPLETE = False
+INITIALIZATION_PENDING = False
 NATIVE_REQUEST_SERIAL = 0
 NATIVE_ACTIVE_REQUESTS = {}
 NATIVE_INFLIGHT_BATCHES = set()
+NATIVE_BATCH_FALLBACKS = set()
 NATIVE_TANKOPEDIA = {}
 NATIVE_TANKOPEDIA_REALM = None
 NATIVE_TANKOPEDIA_HANDLE = None
@@ -165,6 +183,17 @@ def _vehicle_id(vehicle):
 def _battles(vehicle):
     try: return max(0, int(vehicle.get('battles', 0))) if isinstance(vehicle, dict) else 0
     except Exception: return 0
+
+def _wins(vehicle):
+    """None preserves the meaning of battles-only records written by 0.0.63."""
+    if not isinstance(vehicle, dict) or 'wins' not in vehicle: return None
+    try: return max(0, int(vehicle.get('wins')))
+    except Exception: return None
+
+def _win_rate_text(vehicle):
+    battles = _battles(vehicle); wins = _wins(vehicle)
+    if battles <= 0 or wins is None or wins > battles: return u'—'
+    return u'%.1f%%' % (100.0 * wins / battles)
 
 def _filtered_vehicles(result):
     vehicles = result.get('vehicles', []) if isinstance(result, dict) else []
@@ -323,17 +352,19 @@ def _panel_state(row):
         return 'pending', None
     if LOOKUP_STATUS['lookup_state'] in ('error', 'timeout'):
         return 'error', None
+    if _int(row.get('dbid')) and CACHE.get('tier') in (6, 8, 10):
+        _log('history state classified: dbID=%s state=pending reason=no completed result' % row.get('dbid'))
+        return 'pending', None
     return 'missing', None
 
 def _classify_history_state(rows):
     rows = list(rows or [])
     if not rows: return HISTORY_STATE_EMPTY_ROSTER
-    levels = []
-    for row in rows:
-        if not row.get('vehicle_intcd') or row.get('vehicle_level') is None: return HISTORY_STATE_INCOMPLETE
-        levels.append(row['vehicle_level'])
-    if len(set(levels)) != 1: return HISTORY_STATE_MIXED_TIER
-    if levels[0] not in (6, 8, 10): return HISTORY_STATE_UNSUPPORTED_TIER
+    if CACHE.get('tier') not in (6, 8, 10):
+        levels = [row.get('vehicle_level') for row in rows if row.get('vehicle_level') is not None]
+        if not levels: return HISTORY_STATE_INCOMPLETE
+        if len(set(levels)) != 1: return HISTORY_STATE_MIXED_TIER
+        return HISTORY_STATE_READY if levels[0] in (6, 8, 10) else HISTORY_STATE_UNSUPPORTED_TIER
     if LOOKUP_STATUS['inflight'] or LOOKUP_STATUS['pending'] or LOOKUP_STATUS['lookup_state'] in ('queued', 'running'): return HISTORY_STATE_LOADING
     return HISTORY_STATE_READY
 
@@ -384,7 +415,8 @@ def _panel_message(row, state, result):
     if state == 'missing':
         return message + 'Vehicles shown: <b>0</b><br/>Vehicle history is not available yet.'
     if state == 'error':
-        return message + 'Vehicles shown: <b>0</b><br/>Vehicle history lookup is unavailable.'
+        detail = result.get('message') if isinstance(result, dict) else None
+        return message + 'Vehicles shown: <b>0</b><br/>' + (detail or 'Vehicle history unavailable from the Wargaming API.')
     vehicles, total = _filtered_vehicles(result)
     message += 'Vehicles shown: <b>%s of %s</b>' % (len(vehicles), total)
     if total and not vehicles: return message + '<br/>No vehicles shown by your filters.<br/>Open Settings to change the global vehicle filters.'
@@ -417,6 +449,7 @@ def _history_header(row, state, result):
     if state == 'ready':
         visible, count = _filtered_vehicles(result)
         text += '<br/>Vehicles shown: <b>%s of %s</b>' % (len(visible), count)
+    if state == 'error': text += '<br/>Vehicle history unavailable from the Wargaming API.'
     return text
 
 def _custom_close(reason, destroy=True):
@@ -490,7 +523,9 @@ def _push_history_view_data(view, row, state, result, reason):
             names = sorted(grouped[label], key=lambda value: value.lower())
             if names:
                 add_heading(label)
-                for vehicle in sorted([item for item in vehicles if next((entry[1] for entry in PANEL_TYPES if entry[0] == item.get('type')), 'Tank Destroyer') == label], key=lambda item: unicode(item.get('name', '')).lower()): add_vehicle(unicode(vehicle.get('name', 'Unknown')), _battles(vehicle))
+                for vehicle in sorted([item for item in vehicles if next((entry[1] for entry in PANEL_TYPES if entry[0] == item.get('type')), 'Tank Destroyer') == label], key=lambda item: unicode(item.get('name', '')).lower()):
+                    wins = _wins(vehicle)
+                    add_vehicle(unicode(vehicle.get('name', 'Unknown')), _battles(vehicle), -1 if wins is None else wins, bool(vehicle.get('isAceMastery')))
     finish()
     vehicles = result.get('vehicles', []) if isinstance(result, dict) else []
     visible, total = _filtered_vehicles(result) if isinstance(result, dict) else ([], 0)
@@ -498,7 +533,32 @@ def _push_history_view_data(view, row, state, result, reason):
     _log('vehicle battles normalized: dbID=%s vehicles=%s withBattles=%s zeroBattles=%s' % (row['dbid'], total, with_battles, len(visible) - with_battles))
     _log('history rows pushed: dbID=%s tier=%s vehicles=%s battleCounts=yes' % (row['dbid'], CACHE['tier'], len(visible)))
     _log('history %s pushed: dbID=%s total=%s visible=%s hiddenMatches=%s' %
-         (reason, row['dbid'], total, len(visible), total - len(visible)))
+          (reason, row['dbid'], total, len(visible), total - len(visible)))
+
+def _set_panel_target(row, state, result, preserve_session=True):
+    PANEL['open'] = True; PANEL['dbid'] = row['dbid']; PANEL['slot'] = row['slot_index']
+    PANEL['generation'] = CACHE['generation']; PANEL['fingerprint'] = _panel_fingerprint(row, state, result)
+    if not preserve_session: PANEL['suppressed_logged'] = False
+
+def _refresh_active_history_view(row, state, result, reason):
+    """Push the selected target into the already visible custom Scaleform view."""
+    view = CUSTOM_WINDOW_VIEW
+    if view is None:
+        _log('active history view refresh skipped: reason=reference missing')
+        return False
+    if not PANEL['open'] or PANEL['dbid'] != row['dbid']:
+        _log('active history view refresh skipped: reason=target changed during refresh')
+        return False
+    try:
+        _log('active history view refresh: dbID=%s slot=%s players=%s' % (row['dbid'], row['slot_index'], len(_panel_rows())))
+        # as_setHistoryHeader + as_beginHistoryRows replaces header, headings,
+        # rows, battle fields, informational text, and scroll position in place.
+        _push_history_view_data(view, row, state, result, reason)
+        _log('active history view refreshed: dbID=%s state=%s' % (row['dbid'], state))
+        return True
+    except Exception as error:
+        _log('active history view refresh failed: ' + type(error).__name__)
+        return False
 
 def _build_custom_view_class():
     """Create the dedicated View subclass only when Scaleform is available."""
@@ -524,6 +584,7 @@ def _build_custom_view_class():
                 position = PANEL.get('position')
                 position_method = getattr(flash, 'as_setPosition', None)
                 if position and callable(position_method): position_method(position[0], position[1])
+                _push_clan_watermark()
                 _log('custom first data push: dbID=%s state=%s' % (pending['row']['dbid'], pending['state']))
             except Exception as error:
                 _custom_population_failed('data push ' + type(error).__name__)
@@ -642,6 +703,7 @@ def _build_filter_view_class():
             try:
                 flash = getattr(self, 'flashObject', None)
                 _send_filter_native_data(flash, FILTER_WINDOW_PENDING or _filter_native_data())
+                _push_clan_watermark()
             except Exception as error: _log('filter view population unavailable: ' + type(error).__name__)
         def _dispose(self):
             global FILTER_WINDOW_VIEW
@@ -652,12 +714,15 @@ def _build_filter_view_class():
         def onSaveS(self, tier6=None, tier8=None, tier10=None):
             hidden = {'6': list(tier6 or []), '8': list(tier8 or []), '10': list(tier10 or [])}
             normalized, valid = _normalise_filter_data({'schema_version': 1, 'hidden_vehicle_ids': hidden})
+            previous = {'schema_version': FILTERS['schema_version'], 'hidden_vehicle_ids': dict((key, set(FILTERS['hidden_vehicle_ids'][key])) for key in ('6','8','10'))}
             if valid: FILTERS.update(normalized)
             counts = _filter_counts()
             _log('filter save callback received: tier6=%s tier8=%s tier10=%s' % (counts['6'], counts['8'], counts['10']))
             if _save_filter_config():
                 _log_history_filters_reapplied()
                 _refresh_panel('filters')
+            else:
+                FILTERS.update(previous); _log('filter config save failed: active history unchanged')
             _close_filter_window('save')
         def onTierS(self, tier=8): _log('filter tier callback received: tier=%s' % (_int(tier) or 8))
         def onDefaultsS(self): _log('filter defaults callback received')
@@ -735,7 +800,15 @@ def _show_panel(row, refresh=False, preserve_session=False):
     state, result = _panel_state(row)
     count = len(result.get('vehicles', [])) if isinstance(result, dict) else 0
     suppressed_logged = PANEL['suppressed_logged'] if preserve_session else False
-    if PANEL['open']:
+    if PANEL['open'] and CUSTOM_WINDOW_VIEW is not None:
+        _set_panel_target(row, state, result, preserve_session)
+        try:
+            if _refresh_active_history_view(row, state, result, 'in-place refresh'): return
+        finally:
+            PANEL['opening'] = False
+        _log('active history view refresh unavailable: opening replacement')
+        PANEL['open'] = False; _destroy_panel_view()
+    elif PANEL['open']:
         PANEL['open'] = False; _destroy_panel_view()
     try:
         if USE_CUSTOM_VEHICLE_WINDOW and CUSTOM_WINDOW_REGISTERED:
@@ -746,7 +819,7 @@ def _show_panel(row, refresh=False, preserve_session=False):
                                       'data': None}
             _log('custom load request: alias=' + SHOTCALLER_VEHICLE_WINDOW_ALIAS)
             app.loadView(SFViewLoadParams(SHOTCALLER_VEHICLE_WINDOW_ALIAS, name=CUSTOM_WINDOW_NAME))
-            PANEL['open'] = True; PANEL['dbid'] = row['dbid']; PANEL['slot'] = row['slot_index']; PANEL['generation'] = CACHE['generation']; PANEL['fingerprint'] = _panel_fingerprint(row, state, result); PANEL['suppressed_logged'] = suppressed_logged
+            _set_panel_target(row, state, result, preserve_session); PANEL['suppressed_logged'] = suppressed_logged
             pending = CUSTOM_WINDOW_PENDING
             def confirm_population():
                 if (PANEL['open'] and CUSTOM_WINDOW_VIEW is None and CUSTOM_WINDOW_PENDING is pending):
@@ -775,19 +848,23 @@ def _refresh_panel(source='lookup'):
         _close_panel('battle started'); return
     state, result = _panel_state(row)
     fingerprint = _panel_fingerprint(row, state, result)
-    if source == 'filters' and CUSTOM_WINDOW_VIEW is not None:
-        try:
-            _log('history live refresh requested after filter save')
-            _log('history live refresh target found')
-            _push_history_view_data(CUSTOM_WINDOW_VIEW, row, state, result, 'live refresh')
-            PANEL['fingerprint'] = fingerprint
+    if CUSTOM_WINDOW_VIEW is not None:
+        if not selected_exists:
+            _set_panel_target(row, state, result, True)
+        elif fingerprint == PANEL['fingerprint'] and source != 'filters':
             PANEL['generation'] = CACHE['generation']
+            if source == 'roster' and not PANEL['suppressed_logged']:
+                PANEL['suppressed_logged'] = True; _log('vehicle panel refresh suppressed: reason=status-only roster change')
             return
-        except Exception as error:
-            _log('history live refresh push failed: ' + type(error).__name__)
+        else:
+            _set_panel_target(row, state, result, True)
+        if _refresh_active_history_view(row, state, result, 'filter save' if source == 'filters' else 'live refresh'):
+            if source == 'filters':
+                visible, total = _filtered_vehicles(result) if isinstance(result, dict) else ([], 0)
+                _log('active history refreshed after filter save: dbID=%s tier=%s total=%s visible=%s hiddenMatches=%s' % (row['dbid'], CACHE['tier'], total, len(visible), total-len(visible)))
+            return
     if source == 'filters' and CUSTOM_WINDOW_VIEW is None:
-        _log('history live refresh skipped: history view not open')
-        return
+        _log('history live refresh skipped: history view not open'); return
     if selected_exists and fingerprint == PANEL['fingerprint']:
         PANEL['generation'] = CACHE['generation']
         if source == 'roster' and not PANEL['suppressed_logged']:
@@ -828,13 +905,14 @@ def _handle_panel_button(button_id):
         _log('vehicle panel target unchanged: reason=' + reason)
         return
     _log('vehicle panel target changed: direction=%s slot=%s dbID=%s vehicles=%s state=%s' % (direction, target['slot_index'], target['dbid'], count, state))
-    suppressed_logged = PANEL['suppressed_logged']
-    PANEL['open'] = False; PANEL['dbid'] = target['dbid']; PANEL['slot'] = target['slot_index']
-    PANEL['suppressed_logged'] = suppressed_logged
-    try:
-        import BigWorld
-        BigWorld.callback(0.0, lambda: _show_panel(target, refresh=True, preserve_session=True))
-    except Exception: _reset_panel_state()
+    _set_panel_target(target, state, result, True)
+    if CUSTOM_WINDOW_VIEW is not None:
+        if not _refresh_active_history_view(target, state, result, 'navigation'):
+            _log('active history view refresh unavailable: navigation fallback')
+            _show_panel(target, refresh=True, preserve_session=True)
+        return
+    _log('active history view refresh skipped: reason=reference missing')
+    _show_panel(target, refresh=True, preserve_session=True)
 
 def _on_panel_key(event):
     try:
@@ -905,6 +983,17 @@ def _native_error(category, http_status=None, body=None):
         outcome['body_prefix'] = _text(body, 200)
     return outcome
 
+def _native_safe_wg_error_value(value, field=''):
+    """WG may echo a bad parameter; do not turn diagnostics into a credential leak."""
+    name = str(field or '').lower()
+    if any(token in name for token in ('application', 'token', 'session', 'auth', 'password')):
+        return '***MASKED***'
+    text = _text(value, 160)
+    try:
+        if NATIVE_WG_APP_ID: text = text.replace(NATIVE_WG_APP_ID, '***MASKED***')
+    except Exception: pass
+    return text
+
 def _native_exception_category(error):
     """Classify without leaking the request URL, credentials, or response body."""
     if isinstance(error, socket.timeout): return 'timeout'
@@ -920,7 +1009,7 @@ def _native_exception_category(error):
     if 'certificate' in text or 'ssl' in text or 'tls' in text: return 'tls'
     return 'unknown'
 
-def request_json(url, callback, errback=None, timeout=10.0):
+def request_json(url, callback, errback=None, timeout=10.0, endpoint=None, accounts=0, realm=None):
     """Issue one HTTPS JSON GET through WoT's audited async fetchURL service.
 
     The returned handle can be cancelled logically. BigWorld.fetchURL itself has
@@ -973,7 +1062,15 @@ def request_json(url, callback, errback=None, timeout=10.0):
                 finish_error(_native_error('invalid_json', status, body))
                 return
             if payload.get('status') != 'ok':
-                finish_error(_native_error('wg_api', status, body))
+                error = payload.get('error') or {}
+                outcome = _native_error('wg_api', status)
+                outcome.update({'endpoint': endpoint or 'unknown', 'accounts': _int(accounts) or 0,
+                                'realm': realm or 'unknown',
+                                'wg_code': _native_safe_wg_error_value(error.get('code', '')),
+                                'wg_message': _native_safe_wg_error_value(error.get('message', '')),
+                                'wg_field': _native_safe_wg_error_value(error.get('field', ''), error.get('field', '')),
+                                'wg_value': _native_safe_wg_error_value(error.get('value', ''), error.get('field', ''))})
+                finish_error(outcome)
                 return
             finish_success(payload, status)
         _native_dispatch(process)
@@ -989,6 +1086,194 @@ def request_json(url, callback, errback=None, timeout=10.0):
         category = _native_exception_category(error)
         _native_dispatch(lambda: finish_error(_native_error(category)))
     return handle
+
+def _clan_emblem_meta_path(realm): return os.path.join(CLAN_EMBLEM_DIR, 'local_%s.json' % str(realm).lower())
+def _clan_emblem_image_path(realm, clan_id, extension): return os.path.join(CLAN_EMBLEM_DIR, '%s_%s.%s' % (str(realm).lower(), int(clan_id), extension))
+
+def _clan_image_extension(body):
+    if isinstance(body, unicode): body = body.encode('latin1', 'ignore')
+    if not isinstance(body, str) or len(body) > CLAN_EMBLEM_MAX_BYTES: return None
+    if body.startswith('\x89PNG\r\n\x1a\n'): return 'png'
+    if body.startswith('\xff\xd8\xff'): return 'jpg'
+    return None
+
+def _local_account_id():
+    try:
+        import BigWorld
+        player = BigWorld.player()
+        for name in ('databaseID', 'dbID', 'accountDBID', 'playerDBID'):
+            value = _int(getattr(player, name, None))
+            if value is not None and value > 0: return value
+    except Exception: pass
+    return None
+
+def _client_clan_id():
+    try:
+        import BigWorld
+        player = BigWorld.player()
+        for name in ('clanDBID', 'clanID', 'clanId'):
+            value = _int(getattr(player, name, None))
+            if value is not None: return value if value > 0 else 0
+    except Exception: pass
+    return None
+
+def _load_clan_emblem_cache(realm):
+    try:
+        data = json.load(open(_clan_emblem_meta_path(realm), 'rb'))
+        if data.get('realm') != realm or not _int(data.get('clan_id')) or not data.get('image_path'): return None
+        if not os.path.isfile(data['image_path']): return None
+        return data
+    except Exception: return None
+
+def _watermark_file_uri(path):
+    try: return 'file:///' + os.path.abspath(path).replace('\\', '/')
+    except Exception: return ''
+
+def _push_clan_watermark():
+    path = LOCAL_CLAN_WATERMARK.get('path')
+    uri = _watermark_file_uri(path) if path and os.path.isfile(path) else ''
+    refreshed = False
+    for view in (CUSTOM_WINDOW_VIEW,):
+        try:
+            method = getattr(getattr(view, 'flashObject', None), 'as_setWatermark', None)
+            if callable(method): method(uri); refreshed = True
+        except Exception: pass
+    if refreshed and uri: _log('active watermark applied: clanID=%s' % LOCAL_CLAN_WATERMARK.get('clan_id'))
+
+def _set_local_clan_watermark(account_id, realm, clan_id, tag, image_path, fetched_at):
+    global CLAN_RESOLUTION_STATE
+    LOCAL_CLAN_WATERMARK.update({'account_id': account_id, 'realm': realm, 'clan_id': clan_id,
+                                 'tag': tag or '', 'path': image_path, 'fetched_at': fetched_at or 0})
+    CLAN_RESOLUTION_STATE = 'ready' if image_path else 'no_clan'
+    _push_clan_watermark()
+
+def _defer_clan_resolution():
+    global CLAN_RETRY_ATTEMPT, CLAN_RETRY_TOKEN, CLAN_RESOLUTION_STATE
+    CLAN_RESOLUTION_STATE = 'pending_account'; CLAN_RETRY_ATTEMPT += 1
+    if CLAN_RETRY_ATTEMPT > CLAN_MAX_RETRIES: _log('clan emblem unavailable: reason=account readiness retry limit'); return
+    CLAN_RETRY_TOKEN += 1; token = CLAN_RETRY_TOKEN
+    _log('clan resolution deferred: reason=local account unavailable attempt=%s' % CLAN_RETRY_ATTEMPT)
+    try:
+        import BigWorld
+        BigWorld.callback(1.0, lambda: _resolve_local_clan_watermark(token))
+    except Exception: pass
+
+def _request_clan_emblem_bytes(url, callback, errback):
+    """Small binary companion to request_json; response bytes are image-validated."""
+    def receive(*args):
+        response = args[0] if len(args) == 1 else None
+        status = getattr(response, 'responseCode', None); body = getattr(response, 'body', None)
+        def finish():
+            if response is None or status is None or status < 200 or status >= 300: errback('http'); return
+            extension = _clan_image_extension(body)
+            if extension is None: errback('invalid image'); return
+            callback(body, extension)
+        _native_dispatch(finish)
+    try:
+        import BigWorld
+        BigWorld.fetchURL(url, receive, {}, 15.0, 'GET', '')
+    except Exception: errback('network')
+
+def _clan_record(data, identifier):
+    if not isinstance(data, dict): return None
+    return data.get(str(identifier), data.get(identifier))
+
+def _clan_emblem_url(emblems):
+    if not isinstance(emblems, dict): return None
+    for size in ('x64', 'x32'):
+        group = emblems.get(size)
+        if isinstance(group, dict):
+            for key in ('portal', 'wot', 'wowp'):
+                value = group.get(key)
+                if isinstance(value, basestring) and value.startswith(('https://', 'http://')): return value
+    return None
+
+def _clan_account_diagnostics(data, account_id):
+    record = _clan_record(data, account_id)
+    _log('WG clan account shape: keys=%s dataType=%s accountKey=%s recordType=%s clanID=%s clan=%s emblems=%s' %
+         (','.join(sorted(map(str, data.keys()))[:8]) if isinstance(data, dict) else '', type(data).__name__, bool(record is not None),
+          type(record).__name__, bool(isinstance(record, dict) and 'clan_id' in record),
+          bool(isinstance(record, dict) and isinstance(record.get('clan'), dict)),
+          bool(isinstance(record, dict) and isinstance((record.get('clan') or {}).get('emblems'), dict))))
+    return record
+
+def _resolve_local_clan_watermark(expected_token=None):
+    global LOCAL_CLAN_RESOLUTION_PENDING, CLAN_RETRY_ATTEMPT, CLAN_RESOLUTION_STATE
+    if expected_token is not None and expected_token != CLAN_RETRY_TOKEN: return
+    if LOCAL_CLAN_RESOLUTION_PENDING: return
+    account_id = _local_account_id()
+    if account_id is None: _defer_clan_resolution(); return
+    CLAN_RETRY_ATTEMPT = 0; CLAN_RESOLUTION_STATE = 'resolving'
+    realm = _native_realm(); client_clan = _client_clan_id(); cached = _load_clan_emblem_cache(realm)
+    _log('local account ready: accountID=%s realm=%s' % (account_id, realm))
+    if cached and client_clan is not None and _int(cached.get('clan_id')) != client_clan:
+        _set_local_clan_watermark(account_id, realm, None, '', None, 0)
+    if client_clan == 0:
+        _set_local_clan_watermark(account_id, realm, None, '', None, 0); _log('clan emblem unavailable: reason=no clan'); return
+    if cached and cached.get('account_id') == account_id and (client_clan is None or _int(cached.get('clan_id')) == client_clan) and time.time() - float(cached.get('fetched_at', 0)) < CLAN_EMBLEM_TTL:
+        _set_local_clan_watermark(account_id, realm, _int(cached['clan_id']), cached.get('tag', ''), cached['image_path'], cached.get('fetched_at', 0)); _log('clan emblem cache hit: clanID=%s' % cached['clan_id']); return
+    LOCAL_CLAN_RESOLUTION_PENDING = True; _log('local clan lookup started')
+    def unavailable(reason):
+        global LOCAL_CLAN_RESOLUTION_PENDING
+        global CLAN_RESOLUTION_STATE
+        LOCAL_CLAN_RESOLUTION_PENDING = False; CLAN_RESOLUTION_STATE = 'error'
+        # Stale art is valid only when the currently known clan is unchanged.
+        if cached and client_clan is not None and _int(cached.get('clan_id')) == client_clan and os.path.isfile(cached.get('image_path', '')):
+            _set_local_clan_watermark(account_id, realm, client_clan, cached.get('tag', ''), cached['image_path'], cached.get('fetched_at', 0))
+        _log('clan emblem unavailable: reason=' + reason)
+    def fetch_clan_info(clan_id, source):
+        _log('local clan info lookup started: clanID=%s' % clan_id)
+        url = _native_url(realm, 'clans/info', {'clan_id': str(clan_id), 'fields': CLAN_INFO_FIELDS})
+        def got_info(payload, meta):
+            _log('WG clan info response: endpoint=clans/info http=%s status=ok clans=1 realm=%s' % (meta.get('http_status'), realm))
+            data = _clan_record(payload.get('data'), clan_id)
+            if not isinstance(data, dict): unavailable('clan info record missing'); return
+            emblems = data.get('emblems') or {}; emblem = _clan_emblem_url(emblems)
+            if not emblem: unavailable('emblem URL unavailable'); return
+            global CLAN_RESOLUTION_STATE
+            CLAN_RESOLUTION_STATE = 'downloading'; _log('local clan resolved: clanID=%s tag=%s source=%s' % (clan_id, _text(data.get('tag', ''), 40), source)); _log('clan emblem refresh started: clanID=%s' % clan_id)
+            def got_image(body, extension):
+                global LOCAL_CLAN_RESOLUTION_PENDING
+                path = _clan_emblem_image_path(realm, clan_id, extension)
+                try:
+                    directory = os.path.dirname(path)
+                    if not os.path.isdir(directory): os.makedirs(directory)
+                    temporary = path + '.tmp'; open(temporary, 'wb').write(body)
+                    if os.path.isfile(path): os.remove(path)
+                    os.rename(temporary, path)
+                    metadata = {'account_id': account_id, 'realm': realm, 'clan_id': clan_id, 'tag': data.get('tag', ''), 'image_path': path, 'fetched_at': time.time()}
+                    _native_atomic_write(_clan_emblem_meta_path(realm), metadata)
+                    LOCAL_CLAN_RESOLUTION_PENDING = False; _set_local_clan_watermark(account_id, realm, clan_id, data.get('tag', ''), path, metadata['fetched_at']); _log('clan emblem refresh complete: clanID=%s bytes=%s' % (clan_id, len(body)))
+                except Exception: unavailable('cache write failed')
+            _request_clan_emblem_bytes(emblem, got_image, unavailable)
+        def info_failure(outcome):
+            if outcome.get('category') == 'wg_api': _log('WG clan info API error: endpoint=clans/info http=%s code=%s message=%s field=%s accounts=1 realm=%s' % (outcome.get('http_status'), outcome.get('wg_code'), outcome.get('wg_message'), outcome.get('wg_field'), realm))
+            unavailable('clan info API failure')
+        request_json(url, got_info, info_failure, timeout=15.0, endpoint='clans/info', accounts=1, realm=realm)
+    if client_clan is not None:
+        fetch_clan_info(client_clan, 'client'); return
+    def start_account_request(with_fields=True, retried=False):
+        params = {'account_id': str(account_id)}
+        if with_fields: params['fields'] = CLAN_ACCOUNTINFO_FIELDS
+        url = _native_url(realm, 'clans/accountinfo', params)
+        def got_account(payload, meta):
+            data = payload.get('data'); _log('WG clan account response: endpoint=clans/accountinfo http=%s status=ok accounts=1 realm=%s' % (meta.get('http_status'), realm))
+            record = _clan_account_diagnostics(data, account_id)
+            if record is None: unavailable('clan account record missing'); return
+            if not isinstance(record, dict): unavailable('clan account response malformed'); return
+            clan = record.get('clan') if isinstance(record.get('clan'), dict) else {}
+            clan_id = _int(record.get('clan_id', clan.get('clan_id')))
+            if clan_id is None or clan_id <= 0:
+                _set_local_clan_watermark(account_id, realm, None, '', None, 0); _log('clan emblem unavailable: reason=no clan'); return
+            _log('local clan membership resolved: clanID=%s' % clan_id)
+            fetch_clan_info(clan_id, 'wg_api')
+        def account_failure(outcome):
+            if outcome.get('category') == 'wg_api': _log('WG clan account API error: endpoint=clans/accountinfo http=%s code=%s message=%s field=%s accounts=1 realm=%s' % (outcome.get('http_status'), outcome.get('wg_code'), outcome.get('wg_message'), outcome.get('wg_field'), realm))
+            if (not retried and with_fields and outcome.get('category') == 'wg_api' and str(outcome.get('wg_code')) == '407'):
+                _log('clan account fields rejected; retrying without fields'); start_account_request(False, True); return
+            unavailable('clan account %s failure' % outcome.get('category', 'request'))
+        request_json(url, got_account, account_failure, timeout=15.0, endpoint='clans/accountinfo', accounts=1, realm=realm)
+    start_account_request()
 
 def cancel_native_request(handle):
     if isinstance(handle, dict):
@@ -1018,7 +1303,7 @@ def _native_cache_path(realm, dbid, tier):
 def _native_read_cache(realm, dbid, tier):
     try:
         data = json.load(open(_native_cache_path(realm, dbid, tier), 'rb'))
-        if data.get('schema') != NATIVE_CACHE_SCHEMA or data.get('realm') != realm or not isinstance(data.get('result'), dict): return None
+        if data.get('schema') not in (1, NATIVE_CACHE_SCHEMA) or data.get('realm') != realm or not isinstance(data.get('result'), dict): return None
         return data
     except Exception: return None
 
@@ -1049,6 +1334,10 @@ def _native_atomic_write(path, data):
 def _native_write_player_cache(realm, dbid, tier, result):
     if _native_atomic_write(_native_cache_path(realm, dbid, tier), {'schema': NATIVE_CACHE_SCHEMA, 'realm': realm, 'dbid': int(dbid), 'tier': int(tier), 'fetched_at': time.time(), 'result': result}): _native_prune_cache()
 
+def _mastery_complete(result):
+    vehicles = result.get('vehicles', []) if isinstance(result, dict) else []
+    return all(isinstance(vehicle, dict) and 'isAceMastery' in vehicle for vehicle in vehicles)
+
 def _native_prune_cache():
     """Bound public player-history retention without touching filter settings."""
     try:
@@ -1075,6 +1364,19 @@ def _native_battles(record):
     try: return max(0, int((record.get('all') or {}).get('battles', 0)))
     except (TypeError, ValueError): return 0
 
+def _native_wins(record, battles):
+    try:
+        all_stats = record.get('all') or {}
+        if 'wins' not in all_stats: return None
+        wins = _int(all_stats.get('wins'))
+        if wins is None or wins < 0 or wins > battles: return None
+        return wins
+    except Exception: return None
+
+def _native_ace_mastery(record):
+    try: return _int(record.get('mark_of_mastery')) == 4
+    except Exception: return False
+
 def _native_battles_present(record):
     try:
         all_stats = record.get('all') or {}
@@ -1091,12 +1393,25 @@ def _native_result(player, records, tankopedia, tier):
         except (TypeError, ValueError): continue
         tank = tankopedia.get(tank_id)
         if not tank or _int(tank.get('tier')) != tier: continue
-        vehicles.append({'tank_id': tank_id, 'name': tank.get('name') or 'Unknown', 'tier': tier,
-                         'type': tank.get('type') or 'unknown', 'battles': _native_battles(record),
-                         'wins': _int((record.get('all') or {}).get('wins')) or 0})
-    vehicles.sort(key=lambda item: (-item['battles'], item['name']))
+        battles = _native_battles(record); wins = _native_wins(record, battles)
+        vehicle = {'tank_id': tank_id, 'name': tank.get('name') or 'Unknown', 'tier': tier,
+                   'type': tank.get('type') or 'unknown', 'battles': battles,
+                   'isAceMastery': _native_ace_mastery(record)}
+        if wins is not None: vehicle['wins'] = wins
+        vehicles.append(vehicle)
+    vehicles.sort(key=lambda item: unicode(item['name']).lower())
     result['vehicles'] = vehicles; result['status'] = 'ok' if vehicles else 'no_vehicle_history'
     return result
+
+def _native_unavailable_result(player):
+    return {'dbid': player['dbid'], 'name': player['name'], 'status': 'api_error', 'vehicles': [],
+            'message': 'Vehicle history unavailable from the Wargaming API.'}
+
+def _native_log_wg_api_error(outcome):
+    """Log only the WG error envelope; never the request URL or credentials."""
+    _log('native WG API error: endpoint=%s code=%s message=%s field=%s value=%s accounts=%s realm=%s' %
+         (outcome.get('endpoint', 'unknown'), outcome.get('wg_code', ''), outcome.get('wg_message', ''),
+          outcome.get('wg_field', ''), outcome.get('wg_value', ''), outcome.get('accounts', 0), outcome.get('realm', 'unknown')))
 
 def _native_lookup_key(realm, tier=None, rows=None):
     if rows is None: rows = CACHE['rows'].values()
@@ -1150,35 +1465,83 @@ def _native_lookup(players, realm, tier, lookup_key):
     started = time.time(); cache_hits = {}; stale = {}; misses = []
     for player in players:
         cached = _native_read_cache(realm, player['dbid'], tier)
-        if cached and time.time() - float(cached.get('fetched_at', 0)) < NATIVE_CACHE_TTL: cache_hits[player['dbid']] = dict(cached['result'])
+        if cached and time.time() - float(cached.get('fetched_at', 0)) < NATIVE_CACHE_TTL:
+            cache_hits[player['dbid']] = dict(cached['result'])
+            if not _mastery_complete(cached['result']): misses.append(player)
         else:
             misses.append(player)
             if cached: stale[player['dbid']] = dict(cached['result'])
-    if cache_hits: _log('native cache hit: players=%s' % len(cache_hits))
+    if cache_hits:
+        incomplete = len([player for player in misses if player['dbid'] in cache_hits])
+        if incomplete: _log('native cache partial hit: players=%s masteryMissing=%s refreshQueued=%s' % (len(cache_hits), incomplete, incomplete))
+        else: _log('native cache hit: players=%s mastery=complete' % len(cache_hits))
     if not misses:
         _native_finish(players, realm, tier, lookup_key, started, cache_hits); return
     def request_stats(tankopedia):
-        account_ids = ','.join(str(player['dbid']) for player in misses)
-        url = _native_url(realm, 'tanks/stats', {'account_id': account_ids, 'fields': 'tank_id,all.battles,all.wins'})
-        _log('native WG request started: endpoint=tanks/stats accounts=%s realm=%s' % (len(misses), realm))
-        def success(payload, meta):
-            data = payload.get('data') or {}; results = dict(cache_hits); vehicle_count = 0; with_battles = 0; zero_battles = 0
-            for player in misses:
+        def store_records(requested, data, results):
+            vehicle_count = 0; with_battles = 0; zero_battles = 0
+            for player in requested:
                 records = data.get(str(player['dbid']))
-                result = _native_result(player, records, tankopedia, tier); results[player['dbid']] = result
+                if records is None:
+                    # A successful response may omit one requested account. It is
+                    # unavailable, not evidence that the other accounts failed.
+                    result = _native_unavailable_result(player)
+                else:
+                    result = _native_result(player, records, tankopedia, tier)
+                results[player['dbid']] = result
                 vehicle_count += len(result['vehicles'])
                 normalized_ids = set(vehicle['tank_id'] for vehicle in result['vehicles'])
                 with_battles += sum(1 for record in (records or []) if _int(record.get('tank_id')) in normalized_ids and _native_battles_present(record))
                 zero_battles += sum(1 for vehicle in result['vehicles'] if vehicle['battles'] == 0)
-                _native_write_player_cache(realm, player['dbid'], tier, result)
-            _log('native WG request complete: status=%s seconds=%.2f' % (meta['http_status'], meta['seconds']))
-            _log('native WG response parsed: players=%s vehicles=%s withBattles=%s zeroBattles=%s' % (len(misses), vehicle_count, with_battles, zero_battles))
+                if result.get('status') != 'api_error': _native_write_player_cache(realm, player['dbid'], tier, result)
+            aced = len([vehicle for result in results.values() for vehicle in result.get('vehicles', []) if vehicle.get('isAceMastery')])
+            _log('vehicle mastery normalized: dbID=multiple vehicles=%s aced=%s' % (vehicle_count, aced))
+            return vehicle_count, with_battles, zero_battles
+
+        def finish_success(requested, payload, meta, results):
+            counts = store_records(requested, payload.get('data') or {}, results)
+            _log('native WG request complete: endpoint=tanks/stats status=%s seconds=%.2f' % (meta['http_status'], meta['seconds']))
+            _log('native WG response parsed: players=%s vehicles=%s withBattles=%s zeroBattles=%s' % ((len(requested),) + counts))
             _native_finish(players, realm, tier, lookup_key, started, results)
+
+        def request_individuals(results):
+            # This is deliberately a single branch from a failed multi-account
+            # request. Individual failures never retry again.
+            pending = {'count': len(misses), 'finished': False}
+            _log('native WG batch recovery: mode=individual accounts=%s realm=%s' % (len(misses), realm))
+            def done():
+                pending['count'] -= 1
+                if pending['count'] <= 0 and not pending['finished']:
+                    pending['finished'] = True
+                    _native_finish(players, realm, tier, lookup_key, started, results)
+            for player in misses:
+                account_id = str(player['dbid'])
+                url = _native_url(realm, 'tanks/stats', {'account_id': account_id, 'fields': 'tank_id,all.battles,all.wins,mark_of_mastery'})
+                def individual_success(payload, meta, player=player):
+                    counts = store_records([player], payload.get('data') or {}, results)
+                    _log('native WG individual recovery complete: dbID=%s status=%s vehicles=%s' % (player['dbid'], meta['http_status'], counts[0]))
+                    done()
+                def individual_failure(outcome, player=player):
+                    if outcome.get('category') == 'wg_api': _native_log_wg_api_error(outcome)
+                    _log('native WG individual recovery failed: dbID=%s category=%s responseCode=%s' % (player['dbid'], outcome.get('category'), outcome.get('http_status')))
+                    results[player['dbid']] = results.get(player['dbid'], _native_unavailable_result(player)); done()
+                request_json(url, individual_success, individual_failure, timeout=15.0, endpoint='tanks/stats', accounts=1, realm=realm)
+
+        account_ids = ','.join(str(player['dbid']) for player in misses)
+        url = _native_url(realm, 'tanks/stats', {'account_id': account_ids, 'fields': 'tank_id,all.battles,all.wins,mark_of_mastery'})
+        _log('tanks/stats request prepared: battles=yes wins=yes mastery=yes accounts=%s realm=%s' % (len(misses), realm))
+        _log('native WG request started: endpoint=tanks/stats accounts=%s realm=%s' % (len(misses), realm))
+        def success(payload, meta):
+            finish_success(misses, payload, meta, dict(cache_hits))
         def failure(outcome):
+            if outcome.get('category') == 'wg_api': _native_log_wg_api_error(outcome)
             _log('native WG request failed: category=%s responseCode=%s' % (outcome.get('category'), outcome.get('http_status')))
             if outcome.get('category') == 'callback': _log('native callback diagnostics: args=%s types=%s' % (outcome.get('callback_args'), outcome.get('callback_types')))
+            fallback_token = (lookup_key, CACHE.get('generation'))
+            if outcome.get('category') == 'wg_api' and len(misses) > 1 and fallback_token not in NATIVE_BATCH_FALLBACKS:
+                NATIVE_BATCH_FALLBACKS.add(fallback_token); request_individuals(dict(cache_hits)); return
             _native_finish(players, realm, tier, lookup_key, started, dict(cache_hits), stale, outcome.get('category'))
-        request_json(url, success, failure, timeout=15.0)
+        request_json(url, success, failure, timeout=15.0, endpoint='tanks/stats', accounts=len(misses), realm=realm)
     if NATIVE_TANKOPEDIA and NATIVE_TANKOPEDIA_REALM == realm:
         request_stats(NATIVE_TANKOPEDIA); return
     cached_tanks = _native_load_tankopedia_cache(realm)
@@ -1201,7 +1564,7 @@ def _native_lookup(players, realm, tier, lookup_key):
             _log('native tankopedia fallback: source=local catalog tanks=%s' % len(local_tanks)); request_stats(local_tanks); return
         _log('native tankopedia unavailable: category=' + str(outcome.get('category')))
         _native_finish(players, realm, tier, lookup_key, started, dict(cache_hits), stale, outcome.get('category'))
-    NATIVE_TANKOPEDIA_HANDLE = request_json(url, tanks_success, tanks_failure, timeout=15.0)
+    NATIVE_TANKOPEDIA_HANDLE = request_json(url, tanks_success, tanks_failure, timeout=15.0, endpoint='encyclopedia/vehicles', accounts=0, realm=realm)
 
 def _queue_lookup(rows, force=False):
     if not is_supported_room_context() or not rows or CACHE['tier'] not in (6, 8, 10) or CACHE['unit_id'] is None: return
@@ -1249,8 +1612,8 @@ def _print_initial(row):
 
 def clear_roster_cache(reason):
     """Central idempotent clear for exit, empty fallback, unit transition, unload."""
-    global EMPTY_SNAPSHOTS, _pending_exit_token, HOVER_ACTIVE
-    _cancel_native_requests(); NATIVE_INFLIGHT_BATCHES.clear()
+    global EMPTY_SNAPSHOTS, _pending_exit_token, HOVER_ACTIVE, LOCAL_CONFIRMED_TIER
+    _cancel_native_requests(); NATIVE_INFLIGHT_BATCHES.clear(); NATIVE_BATCH_FALLBACKS.clear(); LOCAL_CONFIRMED_TIER = None
     if not CACHE['rows'] and not VOLUNTEERS:
         _close_panel(reason)
         EMPTY_SNAPSHOTS = 0; _pending_exit_token = None; return False
@@ -1345,18 +1708,23 @@ def _schedule_platoon_rebuilds(entity, reason):
             if delay == 0.0: run(attempt)
 
 def _resolve_tier(rows):
-    """Regular platoons require every occupied selected vehicle to agree."""
-    if ROOM_CONTEXT != ROOM_CONTEXT_PLATOON:
-        return next((row['vehicle_level'] for row in rows if row['vehicle_level'] in (6, 8, 10)), None), None
-    selected = [row['vehicle_level'] for row in rows if row.get('vehicle_intcd') is not None and row.get('vehicle_level') is not None]
-    if len(selected) != len(rows):
-        return None, 'unknown'
-    unique = sorted(set(selected))
-    if len(unique) != 1:
-        _log('platoon tier unresolved: selectedTiers=' + str(unique)); return None, 'mixed'
-    if unique[0] not in (6, 8, 10):
-        _log('platoon tier unsupported: tier=' + str(unique[0])); return None, 'unsupported'
-    _log('platoon tier resolved: tier=' + str(unique[0])); return unique[0], None
+    global LOCAL_CONFIRMED_TIER
+    local_dbid = _local_account_id()
+    local = next((row for row in rows if local_dbid is not None and _int(row.get('dbid')) == local_dbid), None)
+    marker = next((row for row in rows if row.get('is_current_user')), None)
+    if marker is not None and local_dbid is not None and _int(marker.get('dbid')) != local_dbid:
+        _log('local row marker mismatch: markerDBID=%s authenticatedDBID=%s' % (marker.get('dbid'), local_dbid))
+    if local is None: local = marker
+    if local is None: return None, 'unknown'
+    tier = local.get('vehicle_level') if local.get('vehicle_intcd') is not None else None
+    if tier in (6, 8, 10):
+        LOCAL_CONFIRMED_TIER = tier
+        _log('local roster row matched: localDBID=%s slot=%s vehicle=%s tier=%s' % (local_dbid, local.get('slot_index'), _vehicle(local), tier))
+        _log('active history tier resolved: source=localSelected tier=%s' % tier); return tier, None
+    if local.get('vehicle_intcd') is None and LOCAL_CONFIRMED_TIER in (6, 8, 10):
+        _log('local tier retained through transient roster frame: tier=%s' % LOCAL_CONFIRMED_TIER); return LOCAL_CONFIRMED_TIER, None
+    LOCAL_CONFIRMED_TIER = None; _log('local tier unavailable: reason=no matched local vehicle')
+    return None, 'unsupported' if tier is not None else 'unknown'
 
 def _cancel_pending_exit(reason):
     global _pending_exit_token
@@ -1437,8 +1805,8 @@ def _apply(rows, source='converter'):
         new[row['dbid']] = row; order.append(row['dbid'])
     unit_id = next((row['unit_id'] for row in rows if row['unit_id'] is not None), None)
     tier, tier_reason = _resolve_tier(new.values())
-    selected_levels = [row.get('vehicle_level') for row in new.values() if row.get('vehicle_intcd') and row.get('vehicle_level') is not None]
-    resolved_tier = selected_levels[0] if selected_levels and len(set(selected_levels)) == 1 else None
+    local_row = next((row for row in new.values() if row.get('is_current_user')), None)
+    resolved_tier = local_row.get('vehicle_level') if local_row and local_row.get('vehicle_intcd') else None
     if CACHE['unit_id'] is not None and unit_id is not None and CACHE['unit_id'] != unit_id:
         clear_roster_cache('unit changed old=%s new=%s' % (CACHE['unit_id'], unit_id))
     old = CACHE['rows']
@@ -1480,9 +1848,12 @@ def _apply(rows, source='converter'):
         _log(('%s roster populated: members=%s tier=%s' % (ROOM_CONTEXT, len(rows), tier)) if ROOM_CONTEXT == ROOM_CONTEXT_PLATOON else ('roster cache populated: members=%s tier=%s unit_id=%s' % (len(rows), tier, unit_id)))
         for row in rows: _print_initial(row)
     else: _log('roster cache changed: members=%s tier=%s generation=%s' % (len(rows), tier, CACHE['generation']))
-    if context == ROOM_CONTEXT_PLATOON and source == 'converter' and tier in (6, 8, 10) and all(row.get('vehicle_intcd') for row in new.values()):
+    if context == ROOM_CONTEXT_PLATOON and source == 'converter' and tier in (6, 8, 10):
         PLATOON_REBUILD_TOKEN += 1
-        _log('platoon initial retries stopped: reason=complete converter roster')
+        _log('platoon initial retries stopped: reason=local history tier resolved')
+    eligible = len([row for row in new.values() if _int(row.get('dbid'))])
+    no_vehicle = len([row for row in new.values() if not row.get('vehicle_intcd')])
+    _log('roster history eligible: members=%s ready=%s unready=%s noVehicle=%s' % (eligible, len([row for row in new.values() if row.get('player_ready')]), len([row for row in new.values() if not row.get('player_ready')]), no_vehicle))
     _queue_lookup(rows, force=first or previous_unit != unit_id or previous_tier != tier)
     _refresh_panel('roster')
 
@@ -1719,15 +2090,89 @@ def _install_watcher():
     except Exception as error:
         _log('watcher lifecycle hook missing: import (' + _text(error, 200) + ')')
 
-def _install():
+def _install_account_readiness_hook():
+    """Account.showGUI is the narrow post-login signal; original behavior wins."""
+    try:
+        import Account
+        cls = getattr(Account, 'Account', None)
+        original = cls.__dict__.get('showGUI') if cls is not None else None
+        if not callable(original) or getattr(original, MARK + 'wrapped', False): return
+        def hook(self, *args, **kwargs):
+            result = original(self, *args, **kwargs)
+            _resolve_local_clan_watermark()
+            return result
+        setattr(hook, MARK + 'wrapped', True); ACCOUNT_LIFECYCLE_ORIGINALS['showGUI'] = original; setattr(cls, 'showGUI', hook)
+        _log('account readiness hook installed: Account.showGUI')
+    except Exception as error: _log('account readiness hook unavailable: ' + type(error).__name__)
+
+def _remove_account_readiness_hook():
+    global CLAN_RETRY_TOKEN
+    CLAN_RETRY_TOKEN += 1
+    try:
+        import Account
+        cls = getattr(Account, 'Account', None); original = ACCOUNT_LIFECYCLE_ORIGINALS.get('showGUI')
+        if cls is not None and original is not None: setattr(cls, 'showGUI', original)
+    except Exception: pass
+    ACCOUNT_LIFECYCLE_ORIGINALS.clear()
+
+def _attempt_initialize(attempt):
+    """Install runtime hooks after WoT has called the public ``init`` entrypoint.
+
+    The converter can arrive shortly after stock mod discovery.  Retrying this
+    internal routine preserves WoT's lifecycle contract: it must never invoke
+    the public init() function again.
+    """
+    global INSTALL_RETRY_ATTEMPT, INSTALL_COMPLETE, INITIALIZATION_PENDING
+    if INSTALL_COMPLETE: return
     count = 0
     try: module = __import__(CONVERTER_MODULE, fromlist=['*'])
-    except Exception as error: _log('converter import failed: ' + _text(error)); return
+    except Exception as error:
+        INSTALL_RETRY_ATTEMPT = attempt + 1
+        _log('converter import deferred: attempt=%s error=%s' % (INSTALL_RETRY_ATTEMPT, _text(error)))
+        if attempt < 10:
+            try:
+                import BigWorld
+                BigWorld.callback(1.0, lambda next_attempt=attempt + 1: _attempt_initialize(next_attempt))
+                INITIALIZATION_PENDING = True
+            except Exception as callback_error:
+                _log('converter retry unavailable: ' + _text(callback_error, 200))
+        else:
+            INITIALIZATION_PENDING = False
+            _log('converter import failed after retries: ' + _text(error, 300))
+        return
+    INSTALL_RETRY_ATTEMPT = 0; INITIALIZATION_PENDING = False
     for name in (PRIMARY,) + SUPPORTING:
         try:
             original = getattr(module, name, None)
             if callable(original) and not getattr(original, MARK + 'wrapped', False): setattr(module, name, _primary_hook(original) if name == PRIMARY else _support_hook(name, original)); count += 1
         except Exception as error: _log('converter hook skipped: %s (%s)' % (name, _text(error)))
-    _load_filter_config(); _install_watcher(); _install_vehicle_selection_listener(); _install_platoon_lifecycle(); _register_custom_window(); _register_filter_window(); _install_panel_keys(); _log('roster converter hooks installed: ' + str(count))
-def init(): _log('loaded'); _install()
-def fini(): _close_panel('mod unloaded'); _remove_panel_keys(); _remove_vehicle_selection_listener(); _remove_platoon_lifecycle(); clear_roster_cache('mod unloaded'); _set_room_context(ROOM_CONTEXT_NONE, 'mod unloaded'); _log('unloaded')
+    _load_filter_config(); _install_watcher(); _install_vehicle_selection_listener(); _install_platoon_lifecycle(); _install_account_readiness_hook(); _register_custom_window(); _register_filter_window(); _install_panel_keys()
+    INSTALL_COMPLETE = True
+    _log('roster converter hooks installed: ' + str(count))
+    try:
+        import BigWorld; BigWorld.callback(3.0, _resolve_local_clan_watermark)
+    except Exception: _resolve_local_clan_watermark()
+def _claim_initialization():
+    """Process-global guard shared by stock discovery and legacy loaders."""
+    try:
+        import BigWorld
+        if getattr(BigWorld, '_shotcaller_standalone_initialized', False):
+            _log('duplicate initialization skipped'); return False
+        setattr(BigWorld, '_shotcaller_standalone_initialized', True)
+        _log('initialization claimed'); return True
+    except Exception:
+        # Python's module cache is still enough if the early client object is
+        # momentarily unavailable; this path avoids registering twice locally.
+        global _shotcaller_fallback_initialized
+        if globals().get('_shotcaller_fallback_initialized', False):
+            _log('duplicate initialization skipped'); return False
+        _shotcaller_fallback_initialized = True; _log('initialization claimed'); return True
+
+def init():
+    if not _claim_initialization(): return
+    _log('loaded'); _attempt_initialize(0)
+def fini(): _close_panel('mod unloaded'); _remove_account_readiness_hook(); _remove_panel_keys(); _remove_vehicle_selection_listener(); _remove_platoon_lifecycle(); clear_roster_cache('mod unloaded'); _set_room_context(ROOM_CONTEXT_NONE, 'mod unloaded'); _log('unloaded')
+
+# WoT imports this module, discovers its public init(), and calls it itself.
+# Do not call or schedule init() from module scope.
+_log('standalone module import started')

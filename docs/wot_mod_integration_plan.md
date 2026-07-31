@@ -1428,3 +1428,28 @@ supported tier, and active DBID set. Same-tier UI-state changes accept the
 response, cache it, and refresh the open history panel. Real identity changes
 produce one deduplicated replacement evaluation, preventing an indefinite
 Pending state.
+
+## Prototype 0.0.63 WG API batch recovery
+
+`tanks/stats` multi-account requests retain the official comma-delimited
+`account_id` format. When HTTP succeeds but the WG envelope reports `status=error`,
+ShotCaller records safe diagnostic fields and retries each unresolved account once.
+Cached and independently successful members remain ready; an absent or repeatedly
+failed member receives a clear API-unavailable state instead of a misleading empty
+vehicle list. The bounded fallback is scoped to that lookup and cannot recurse.
+
+## Prototype 0.0.64 WR/battles and local clan watermark
+
+History rows keep public battle and win totals and show a one-decimal win rate
+only where the statistic is valid. A faint, click-through, local-player clan
+emblem is optional for history and filter overlays. It is refreshed from public
+WG clan data at most every 24 hours, clears immediately after a detected clan
+change, and degrades silently to the normal background.
+
+## Prototype 0.0.62 in-place navigation refresh
+
+The custom overlay's global alias cannot be loaded again while it is visible;
+WoT coalesces the request. Previous/Next now updates the existing populated
+view through the structured DAAPI bridge. The existing `as_beginHistoryRows`
+method clears old headings, tank rows, battle counts, and scroll position,
+then new header/rows are pushed without moving or recreating the window.

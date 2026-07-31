@@ -397,3 +397,30 @@ bold vehicle-class heading inside the clipping rectangle.
 - Room/unit changes, tier changes, realm changes, battle entry, and removed
   roster members remain material invalidations. They trigger one deduplicated,
   cache-aware replacement evaluation rather than leaving the panel Pending.
+
+# Prototype 0.0.63 — WG API batch recovery
+
+- A WG JSON `status=error` from a multi-account `tanks/stats` request now logs
+  safe endpoint/code/message/field/account/realm diagnostics and performs one
+  individual retry per unresolved player.
+- Existing cached results and successful individual responses are preserved.
+  Missing or still-failed accounts show “Vehicle history unavailable from the
+  Wargaming API.” rather than a zero-vehicle history.
+
+# Prototype 0.0.64 — WR / Battles and local clan watermark
+
+- Rows now show public `WR / Battles`; a one-decimal win rate appears only for
+  valid nonzero battle totals. Battles-only legacy cache records safely display
+  an em dash until refreshed.
+- The optional faint emblem watermark always belongs to the logged-in player's
+  public clan, not the roster target. Its validated image and metadata are
+  cached for 24 hours; no clan or refresh/image failure leaves normal windows.
+
+# Prototype 0.0.62 — in-place player navigation
+
+- Previous/Next no longer submits a duplicate `loadView` request for the
+  already-open global history alias. It pushes the selected roster member
+  directly into the active custom view.
+- The structured history bridge replaces heading/state and invokes
+  `as_beginHistoryRows`, which clears old rows and battle fields and resets the
+  list scroll position without moving or recreating the draggable overlay.

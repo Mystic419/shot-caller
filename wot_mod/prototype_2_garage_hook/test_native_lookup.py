@@ -17,7 +17,7 @@ assert 'account_id=1%2C2' in url and 'application_id=test-public-id' in url
 records = [{'tank_id': 7, 'all': {'battles': 9, 'wins': 4}}, {'tank_id': 8, 'all': {'battles': -1}}]
 tanks = {7: {'name': 'Tank Seven', 'tier': 8, 'type': 'heavyTank'}, 8: {'name': 'Tank Eight', 'tier': 8, 'type': 'mediumTank'}}
 result = mod._native_result({'dbid': 1, 'name': 'tester'}, records, tanks, 8)
-assert result['status'] == 'ok' and result['vehicles'][0]['battles'] == 9 and result['vehicles'][1]['battles'] == 0
+assert result['status'] == 'ok' and result['vehicles'][0]['name'] == 'Tank Eight' and result['vehicles'][0]['battles'] == 0 and result['vehicles'][1]['battles'] == 9
 assert mod._native_result({'dbid': 2, 'name': 'missing'}, None, tanks, 8)['status'] == 'no_account'
 assert mod._native_result({'dbid': 3, 'name': 'empty'}, [], tanks, 8)['status'] == 'no_vehicle_history'
 
@@ -26,7 +26,7 @@ if os.path.isdir(test_cache): shutil.rmtree(test_cache)
 mod.NATIVE_CACHE_DIR = test_cache
 mod._native_write_player_cache('NA', 1, 8, result)
 cached = mod._native_read_cache('NA', 1, 8)
-assert cached and cached['result']['vehicles'][0]['battles'] == 9
+assert cached and any(vehicle['battles'] == 9 for vehicle in cached['result']['vehicles'])
 cached['fetched_at'] = time.time() - mod.NATIVE_CACHE_TTL - 1
 open(mod._native_cache_path('NA', 1, 8), 'wb').write(mod.json.dumps(cached))
 assert time.time() - mod._native_read_cache('NA', 1, 8)['fetched_at'] > mod.NATIVE_CACHE_TTL

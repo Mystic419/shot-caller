@@ -9,8 +9,10 @@ package shotcaller.ui {
     import net.wg.infrastructure.base.AbstractView;
 
     public final class ShotcallerVehicleFilters extends AbstractView {
-        private const W:Number = 520, H:Number = 680, TOP:Number = 174, BODY_H:Number = 420;
-        private var info:TextField, diagnostic:TextField, search:TextField, viewport:Sprite, list:Sprite, thumb:Sprite;
+        // Two deliberate selector rows: tiers, then all five vehicle classes.
+        // The viewport starts below both rows with an 8px breathing gap.
+        private const W:Number = 520, H:Number = 680, TOP:Number = 194, BODY_H:Number = 400;
+        private var info:TextField, diagnostic:TextField, search:TextField, viewport:Sprite, list:Sprite, thumb:Sprite, wheelCapture:Sprite;
         private var payload:Object, catalogs:Object = {}, hidden:Object = {"6":{}, "8":{}, "10":{}}, classes:Object = {"heavyTank":true,"mediumTank":true,"lightTank":true,"AT-SPG":true,"SPG":true};
         private var currentTier:int = 8, dragging:Boolean = false, dragDX:Number, dragDY:Number;
         public var onClose:Function, onSave:Function, onCancel:Function, onTier:Function, onDefaults:Function, onPayloadDiagnostic:Function;
@@ -24,8 +26,17 @@ package shotcaller.ui {
             info=label("Checked vehicles are hidden from ShotCaller results.",16,44,W-32,24,12,0xB8B1A3,false);
             diagnostic=label("Waiting for catalog...",16,66,W-32,20,13,0xF0A64B,true);
             label("Search:",16,94,54,20,12,0xFFFFFF,false); search=label("",72,91,250,25,13,0xFFFFFF,false);search.type=TextFieldType.INPUT;search.selectable=true;search.mouseEnabled=true;search.background=true;search.backgroundColor=0x222222;search.border=true;search.borderColor=0x666666;search.addEventListener(Event.CHANGE,changed);
-            button("VI",16,124,54,28);button("VIII",76,124,54,28);button("X",136,124,54,28);button("Heavy",202,124,62,28);button("Medium",270,124,68,28);button("Light",344,124,58,28);button("Tank Destroyer",202,154,132,28);button("Artillery",340,154,82,28);
-            viewport=new Sprite();viewport.x=16;viewport.y=TOP;viewport.scrollRect=new Rectangle(0,0,W-54,BODY_H);addChild(viewport);list=new Sprite();viewport.addChild(list);viewport.addEventListener(MouseEvent.MOUSE_WHEEL,wheel);
+            // Tier selector row.
+            button("VI",16,124,54,28);button("VIII",76,124,54,28);button("X",136,124,54,28);
+            // Vehicle-class row: fixed 6px gutters, aligned to the same 16px
+            // content inset, and sized so Tank Destroyer remains unwrapped.
+            button("Heavy",16,158,74,28);button("Medium",96,158,78,28);button("Light",180,158,64,28);button("Tank Destroyer",250,158,146,28);button("Artillery",402,158,94,28);
+            viewport=new Sprite();viewport.x=16;viewport.y=TOP;viewport.scrollRect=new Rectangle(0,0,W-54,BODY_H);addChild(viewport);
+            // Scaleform does not hit-test an empty Sprite gap. This near-zero
+            // alpha rectangle sits behind rows, so its wheel event bubbles to
+            // the one authoritative viewport handler without blocking clicks.
+            wheelCapture=new Sprite();wheelCapture.mouseEnabled=true;wheelCapture.mouseChildren=false;wheelCapture.graphics.beginFill(0x000000,0.01);wheelCapture.graphics.drawRect(0,0,W-54,BODY_H);wheelCapture.graphics.endFill();viewport.addChild(wheelCapture);
+            list=new Sprite();viewport.addChild(list);viewport.addEventListener(MouseEvent.MOUSE_WHEEL,wheel);
             graphics.beginFill(0x292929);graphics.drawRect(W-24,TOP,8,BODY_H);graphics.endFill();thumb=new Sprite();thumb.graphics.beginFill(0xAAAAAA);thumb.graphics.drawRect(0,0,8,50);thumb.graphics.endFill();thumb.x=W-24;thumb.y=TOP;thumb.addEventListener(MouseEvent.MOUSE_DOWN,thumbDown);addChild(thumb);
             button("Hide All",16,620,82,30);button("Show All",104,620,82,30);button("Defaults",192,620,82,30);button("Save",350,620,72,30);button("Cancel",428,620,72,30); addEventListener(MouseEvent.MOUSE_DOWN,titleDown);
         }

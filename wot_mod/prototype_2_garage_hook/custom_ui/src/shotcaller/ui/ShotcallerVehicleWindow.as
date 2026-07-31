@@ -1,11 +1,15 @@
 package shotcaller.ui {
     import flash.display.MovieClip;
+    import flash.display.Loader;
     import flash.display.Sprite;
     import flash.display.GradientType;
     import flash.events.Event;
     import flash.events.MouseEvent;
+    import flash.events.IOErrorEvent;
+    import flash.events.SecurityErrorEvent;
     import flash.geom.Rectangle;
     import flash.geom.Matrix;
+    import flash.net.URLRequest;
     import flash.text.TextField;
     import flash.text.TextFieldAutoSize;
     import flash.text.TextFormat;
@@ -22,6 +26,10 @@ package shotcaller.ui {
         private const FOOTER_PADDING:Number = 16;
         private const FOOTER_GAP:Number = 8;
         private const FOOTER_BUTTONS:int = 4;
+        // Deliberately subdued background treatment; all interactive content is
+        // added above this Loader and remains fully readable/clickable.
+        private const WATERMARK_ALPHA:Number = 0.14;
+        private const WATERMARK_MAX_SIZE:Number = 300;
         private var titleField:TextField;
         private var statusField:TextField;
         private var content:Sprite;
@@ -36,6 +44,7 @@ package shotcaller.ui {
         private var dragDX:Number = 0;
         private var dragDY:Number = 0;
         private var pendingData:String = null;
+        private var watermark:Loader;
         public var onClose:Function;
         public var onPrevious:Function;
         public var onNext:Function;
@@ -116,7 +125,7 @@ package shotcaller.ui {
             if (label == null || label.indexOf("SHOTCALLER") >= 0 || label.indexOf("[") >= 0) return;
             var yv:Number = content.height; trace("[shotcaller] history heading input: label=" + label + " length=" + label.length); addHeadingRow(label, yv);
         }
-        public function as_addHistoryVehicle(label:String, battles:Number=0):void { addVehicleRow(label, Math.max(0, int(battles)), content.height); }
+        public function as_addHistoryVehicle(label:String, battles:Number=0, wins:Number=-1, isAce:Boolean=false):void { addVehicleRow(label, Math.max(0, int(battles)), int(wins), isAce, content.height); }
         public function as_finishHistoryRows():void { updateScroll(true); visible = true; }
 
         public function as_setPosition(px:Number, py:Number):void {
@@ -124,6 +133,16 @@ package shotcaller.ui {
             x = Math.max(0, Math.min(stage.stageWidth - W, px));
             y = Math.max(0, Math.min(stage.stageHeight - H, py));
         }
+
+        public function as_setWatermark(uri:String):void {
+            if (watermark != null) { try { watermark.close(); } catch (ignore:Error) {} if (contains(watermark)) removeChild(watermark); watermark = null; }
+            if (uri == null || uri.length == 0) return;
+            watermark = new Loader(); watermark.mouseEnabled = false; watermark.mouseChildren = false; watermark.alpha = WATERMARK_ALPHA;
+            watermark.contentLoaderInfo.addEventListener(Event.COMPLETE, watermarkReady); watermark.contentLoaderInfo.addEventListener(IOErrorEvent.IO_ERROR, watermarkFailed); watermark.contentLoaderInfo.addEventListener(SecurityErrorEvent.SECURITY_ERROR, watermarkFailed);
+            try { watermark.load(new URLRequest(uri)); } catch (error:Error) { watermark = null; }
+        }
+        private function watermarkReady(event:Event):void { if (watermark == null || watermark.content == null) return; var scale:Number = Math.min(WATERMARK_MAX_SIZE / Math.max(1, watermark.content.width), WATERMARK_MAX_SIZE / Math.max(1, watermark.content.height)); watermark.scaleX = watermark.scaleY = scale; watermark.x = (W - watermark.width) * .5; watermark.y = VIEW_Y + (VIEW_H - watermark.height) * .5; addChildAt(watermark, 0); }
+        private function watermarkFailed(event:Event):void { if (watermark != null && contains(watermark)) removeChild(watermark); watermark = null; }
 
         public function as_setMessageState(contextLabel:String, titleLine:String, detailLine:String):void {
             if (statusField == null) return;
@@ -133,11 +152,14 @@ package shotcaller.ui {
         }
 
         private function clearContent():void { while (content != null && content.numChildren > 0) content.removeChildAt(0); }
-        private function addVehicleRow(label:String, battles:int, yv:Number):void { var nameField:TextField = new TextField(); nameField.x = CONTENT_X; nameField.y = yv; nameField.width = W - 202; nameField.height = 20; nameField.defaultTextFormat = new TextFormat("_sans", 13, 0xFFFFFF, false); nameField.embedFonts = false; nameField.multiline = false; nameField.wordWrap = false; nameField.selectable = false; nameField.text = label; content.addChild(nameField); var battlesField:TextField = new TextField(); battlesField.x = W - 178; battlesField.y = yv; battlesField.width = 118; battlesField.height = 20; battlesField.defaultTextFormat = new TextFormat("_sans", 12, 0xB8B1A3, false, null, null, null, null, "right"); battlesField.embedFonts = false; battlesField.multiline = false; battlesField.wordWrap = false; battlesField.selectable = false; battlesField.text = formatBattles(battles) + (battles == 1 ? " battle" : " battles"); content.addChild(battlesField); }
+        private function addVehicleRow(label:String, battles:int, wins:int, isAce:Boolean, yv:Number):void { var nameField:TextField = new TextField(); nameField.x = CONTENT_X; nameField.y = yv; nameField.width = W - 202; nameField.height = 20; nameField.defaultTextFormat = new TextFormat("_sans", 13, 0xFFFFFF, false); nameField.embedFonts = false; nameField.multiline = false; nameField.wordWrap = false; nameField.selectable = false; nameField.text = label; content.addChild(nameField); if(isAce) addAceBadge(nameField, yv); var statsField:TextField = new TextField(); statsField.x = W - 178; statsField.y = yv; statsField.width = 118; statsField.height = 20; statsField.defaultTextFormat = new TextFormat("_sans", 12, 0xB8B1A3, false, null, null, null, null, "right"); statsField.embedFonts = false; statsField.multiline = false; statsField.wordWrap = false; statsField.selectable = false; statsField.text = formatWinRate(wins, battles) + " / " + formatBattles(battles); content.addChild(statsField); }
+        private function addAceBadge(nameField:TextField, yv:Number):void { var badge:Sprite=new Sprite(); badge.mouseEnabled=false; badge.mouseChildren=false; badge.graphics.beginFill(0xC99A3D); badge.graphics.drawCircle(0,0,7); badge.graphics.endFill(); badge.graphics.lineStyle(1,0xF1D57A); badge.graphics.drawCircle(0,0,7); badge.x=Math.min(W-190,nameField.x+Math.min(nameField.textWidth+12,nameField.width-8)); badge.y=yv+10; var a:TextField=new TextField();a.x=-4;a.y=-7;a.width=8;a.height=13;a.selectable=false;a.mouseEnabled=false;a.defaultTextFormat=new TextFormat("_sans",9,0x211B10,true,null,null,null,null,"center");a.text="A";badge.addChild(a);content.addChild(badge); }
         private function formatBattles(value:int):String { var raw:String = String(Math.max(0, value)); var out:String = ""; var n:int = raw.length; for (var i:int = 0; i < n; i++) { if (i > 0 && (n - i) % 3 == 0) out += ","; out += raw.charAt(i); } return out; }
+        private function formatWinRate(wins:int, battles:int):String { if (battles <= 0 || wins < 0 || wins > battles) return "—"; return (Math.round((1000.0 * wins / battles)) / 10.0).toFixed(1) + "%"; }
         private function addHeadingRow(label:String, yv:Number):void {
             var plate:Sprite = new Sprite(); plate.x = 8; plate.y = yv; plate.graphics.beginFill(0x303428); plate.graphics.drawRect(0,0,W-68,24); plate.graphics.endFill(); plate.graphics.beginFill(0xD98B34); plate.graphics.drawRect(0,23,W-68,1); plate.graphics.endFill(); content.addChild(plate);
             var heading:TextField = new TextField(); heading.x = 24; heading.y = yv + 3; heading.width = W - 92; heading.height = 20; heading.defaultTextFormat = new TextFormat("_sans", 13, 0xE8E2D5, true); heading.embedFonts = false; heading.autoSize = TextFieldAutoSize.NONE; heading.multiline = false; heading.wordWrap = false; heading.selectable = false; heading.text = label; content.addChild(heading);
+            var statsHeading:TextField = new TextField(); statsHeading.x = W - 178; statsHeading.y = yv + 3; statsHeading.width = 118; statsHeading.height = 20; statsHeading.defaultTextFormat = new TextFormat("_sans", 11, 0xE8E2D5, true, null, null, null, null, "right"); statsHeading.embedFonts = false; statsHeading.selectable = false; statsHeading.text = "WR / Battles"; content.addChild(statsHeading);
             trace("[shotcaller] history heading rendered: text=" + heading.text + " length=" + heading.text.length + " fieldX=" + heading.x + " effectiveX=" + (viewport.x + content.x + heading.x));
         }
 

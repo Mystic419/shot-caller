@@ -68,6 +68,20 @@ unfiltered WG record list. Tankopedia completion is logged; a failed refresh
 falls back to the existing local VI/VIII/X client catalog before failing the
 lookup.
 
+## 0.0.62 active-view navigation repair
+
+Previous/Next had already selected the correct cached roster DBID, but then
+called `loadView` with the same global alias while the custom history view was
+open. WoT coalesced that duplicate load request, leaving the old visible data.
+The navigation path now retains the populated custom-view reference and pushes
+the selected row through the existing structured DAAPI bridge in place.
+`as_setHistoryHeader` replaces name/clan/counter/state, while
+`as_beginHistoryRows` clears all heading, vehicle, battle-count, and
+informational children and resets the scroll body to the top before new rows
+are sent. The overlay is neither closed nor moved. If roster membership
+changes, the selected DBID is retained when possible; otherwise the nearest
+available row is selected and refreshed in place.
+
 ## Client networking audit
 
 The read-only 2.3.1.0 client source was inspected from the extracted reference
@@ -262,3 +276,26 @@ adapter's safe category and HTTP status; diagnose `BigWorld.fetchURL` first,
 not raw `urllib2`. A hosted backend is only the transparent fallback if WoT's
 client gateway cannot reliably reach the public WG API under current client
 TLS/policy constraints.
+
+## 0.0.63 WG API batch recovery
+
+The client sends multiple `account_id` values to `tanks/stats` as the official
+comma-delimited query value (URL-encoded as `%2C`). A HTTP 200 response can
+still carry the WG JSON `status=error` envelope. The native coordinator now
+logs only safe envelope fields—endpoint, WG code/message, optional field/value,
+account count, and realm—never the URL or application ID. A failed multi-account
+envelope makes one bounded transition to individual unresolved-account requests;
+there is no recursive retry. Valid memory/disk cache entries remain intact,
+successful individual records are cached, and only accounts that still fail or
+are absent from an otherwise successful response receive the explicit
+informational API-unavailable state.
+
+## 0.0.64 win rate and local clan watermark
+
+The native `tanks/stats` record now preserves non-negative `all.wins` alongside
+battles. The history row renders public `WR / Battles`; missing legacy wins,
+zero battles, and impossible win totals render an em dash rather than a false
+percentage. The optional watermark is based only on the logged-in account's
+public clan, never the currently selected roster member. Metadata and validated
+PNG/JPEG art use a 24-hour cache beneath ShotCaller's existing cache directory;
+no-clan or image failures leave both windows unchanged.
