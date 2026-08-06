@@ -46,6 +46,9 @@ NATIVE_REALMS = {'NA': 'https://api.worldoftanks.com', 'EU': 'https://api.worldo
 NATIVE_DEFAULT_REALM = 'NA'
 NATIVE_CACHE_TTL = 6 * 60 * 60
 NATIVE_MAX_BATCH_ACCOUNTS = 15
+NATIVE_STATS_CHUNK_ACCOUNTS = 8
+NATIVE_STATS_URL_MAX_LENGTH = 1800
+NATIVE_RATE_LIMIT_DELAYS = (0.75, 1.5, 3.0)
 NATIVE_CACHE_DIR = os.path.join('mods', 'configs', 'shotcaller', 'cache')
 NATIVE_CACHE_SCHEMA = 2
 CLAN_EMBLEM_TTL = 24 * 60 * 60
@@ -66,6 +69,7 @@ INSTALL_COMPLETE = False
 INITIALIZATION_PENDING = False
 NATIVE_REQUEST_SERIAL = 0
 NATIVE_ACTIVE_REQUESTS = {}
+NATIVE_STATS_REQUEST_ACTIVE = False
 NATIVE_INFLIGHT_BATCHES = set()
 NATIVE_BATCH_FALLBACKS = set()
 NATIVE_TANKOPEDIA = {}
@@ -1281,7 +1285,9 @@ def cancel_native_request(handle):
         NATIVE_ACTIVE_REQUESTS.pop(handle.get('token'), None)
 
 def _cancel_native_requests():
+    global NATIVE_STATS_REQUEST_ACTIVE
     for handle in list(NATIVE_ACTIVE_REQUESTS.values()): cancel_native_request(handle)
+    NATIVE_STATS_REQUEST_ACTIVE = False
 
 def _native_realm():
     realm = NATIVE_DEFAULT_REALM
@@ -1293,7 +1299,10 @@ def _native_realm():
     return realm
 
 def _native_url(realm, path, params):
-    if not NATIVE_WG_APP_ID: return None
+    # A release builder injects the non-empty public application ID into its
+    # staged source.  Keep this guard as a runtime safety net so an empty or
+    # whitespace value can never form a malformed WG URL.
+    if not NATIVE_WG_APP_ID or not str(NATIVE_WG_APP_ID).strip(): return None
     query = dict(params); query['application_id'] = NATIVE_WG_APP_ID
     return NATIVE_REALMS[realm] + '/wot/' + path + '/?' + urllib.urlencode(query)
 
@@ -1460,6 +1469,36 @@ def _native_local_tankopedia():
     except Exception: pass
     return dict((key, value) for key, value in tanks.iteritems() if key is not None)
 
+def _native_stats_url(realm, players):
+    account_ids = ','.join(str(player['dbid']) for player in players)
+    if not account_ids or account_ids != ','.join(str(_int(player['dbid'])) for player in players): return None
+    return _native_url(realm, 'tanks/stats', {'account_id': account_ids, 'fields': 'tank_id,all.battles,all.wins,mark_of_mastery'})
+
+def _native_stats_chunks(players, realm):
+    """Bound batch URLs before fetchURL; never send a partial account ID."""
+    chunks = []; remaining = list(players)
+    while remaining:
+        size = min(NATIVE_STATS_CHUNK_ACCOUNTS, len(remaining))
+        while size > 0:
+            chunk = remaining[:size]; url = _native_stats_url(realm, chunk)
+            if url and len(url) <= NATIVE_STATS_URL_MAX_LENGTH: break
+            size -= 1
+        if size <= 0: return None
+        chunks.append(chunk); remaining = remaining[size:]
+    return chunks
+
+def _native_is_rate_limited(outcome):
+    if outcome.get('category') != 'wg_api': return False
+    text = '%s %s' % (outcome.get('wg_code', ''), outcome.get('wg_message', ''))
+    return 'request_limit_exceeded' in text.lower()
+
+def _native_schedule_stats_retry(delay, callback):
+    try:
+        import BigWorld
+        BigWorld.callback(delay, callback); return True
+    except Exception:
+        return False
+
 def _native_lookup(players, realm, tier, lookup_key):
     global NATIVE_TANKOPEDIA, NATIVE_TANKOPEDIA_REALM, NATIVE_TANKOPEDIA_HANDLE
     started = time.time(); cache_hits = {}; stale = {}; misses = []
@@ -1498,50 +1537,75 @@ def _native_lookup(players, realm, tier, lookup_key):
             _log('vehicle mastery normalized: dbID=multiple vehicles=%s aced=%s' % (vehicle_count, aced))
             return vehicle_count, with_battles, zero_battles
 
-        def finish_success(requested, payload, meta, results):
-            counts = store_records(requested, payload.get('data') or {}, results)
-            _log('native WG request complete: endpoint=tanks/stats status=%s seconds=%.2f' % (meta['http_status'], meta['seconds']))
-            _log('native WG response parsed: players=%s vehicles=%s withBattles=%s zeroBattles=%s' % ((len(requested),) + counts))
-            _native_finish(players, realm, tier, lookup_key, started, results)
+        chunks = _native_stats_chunks(misses, realm)
+        if not chunks:
+            _log('native WG request rejected: endpoint=tanks/stats reason=url_limit accounts=%s' % len(misses))
+            _native_finish(players, realm, tier, lookup_key, started, dict(cache_hits), stale, 'url_limit'); return
+        state = {'queue': list(chunks), 'results': dict(cache_hits), 'failed': False, 'finished': False}
 
-        def request_individuals(results):
-            # This is deliberately a single branch from a failed multi-account
-            # request. Individual failures never retry again.
-            pending = {'count': len(misses), 'finished': False}
-            _log('native WG batch recovery: mode=individual accounts=%s realm=%s' % (len(misses), realm))
-            def done():
-                pending['count'] -= 1
-                if pending['count'] <= 0 and not pending['finished']:
-                    pending['finished'] = True
-                    _native_finish(players, realm, tier, lookup_key, started, results)
-            for player in misses:
-                account_id = str(player['dbid'])
-                url = _native_url(realm, 'tanks/stats', {'account_id': account_id, 'fields': 'tank_id,all.battles,all.wins,mark_of_mastery'})
-                def individual_success(payload, meta, player=player):
-                    counts = store_records([player], payload.get('data') or {}, results)
-                    _log('native WG individual recovery complete: dbID=%s status=%s vehicles=%s' % (player['dbid'], meta['http_status'], counts[0]))
-                    done()
-                def individual_failure(outcome, player=player):
+        def finish():
+            if state['finished']: return
+            state['finished'] = True
+            _native_finish(players, realm, tier, lookup_key, started, state['results'], stale, 'api' if state['failed'] else None)
+
+        def stale_or_done():
+            if _native_is_stale(lookup_key):
+                finish(); return True
+            return False
+
+        def run_next():
+            global NATIVE_STATS_REQUEST_ACTIVE
+            if state['finished'] or stale_or_done(): return
+            if not state['queue']:
+                finish(); return
+            if NATIVE_STATS_REQUEST_ACTIVE:
+                if not _native_schedule_stats_retry(0.25, run_next):
+                    state['failed'] = True; finish()
+                return
+            requested = state['queue'].pop(0); url = _native_stats_url(realm, requested)
+            if not url or len(url) > NATIVE_STATS_URL_MAX_LENGTH:
+                if len(requested) > 1:
+                    midpoint = max(1, len(requested) // 2); state['queue'] = [requested[:midpoint], requested[midpoint:]] + state['queue']; run_next(); return
+                state['failed'] = True; state['results'][requested[0]['dbid']] = _native_unavailable_result(requested[0]); run_next(); return
+            def begin(attempt=0):
+                global NATIVE_STATS_REQUEST_ACTIVE
+                if state['finished'] or stale_or_done(): return
+                NATIVE_STATS_REQUEST_ACTIVE = True
+                _log('tanks/stats request prepared: accounts=%s urlLength=%s realm=%s' % (len(requested), len(url), realm))
+                _log('native WG request started: endpoint=tanks/stats accounts=%s realm=%s attempt=%s' % (len(requested), realm, attempt + 1))
+                def success(payload, meta):
+                    global NATIVE_STATS_REQUEST_ACTIVE
+                    NATIVE_STATS_REQUEST_ACTIVE = False
+                    if stale_or_done(): return
+                    data = payload.get('data') if isinstance(payload, dict) else None
+                    if not isinstance(data, dict):
+                        failure({'category': 'malformed_response', 'http_status': meta.get('http_status'), 'endpoint': 'tanks/stats', 'accounts': len(requested), 'realm': realm})
+                        return
+                    counts = store_records(requested, data, state['results'])
+                    _log('native WG request complete: endpoint=tanks/stats status=%s seconds=%.2f' % (meta['http_status'], meta['seconds']))
+                    _log('native WG response parsed: players=%s vehicles=%s withBattles=%s zeroBattles=%s' % ((len(requested),) + counts))
+                    run_next()
+                def failure(outcome):
+                    global NATIVE_STATS_REQUEST_ACTIVE
+                    NATIVE_STATS_REQUEST_ACTIVE = False
+                    if stale_or_done(): return
+                    if _native_is_rate_limited(outcome) and attempt < len(NATIVE_RATE_LIMIT_DELAYS):
+                        delay = NATIVE_RATE_LIMIT_DELAYS[attempt]
+                        LOOKUP_STATUS['lookup_state'] = 'pending'
+                        _log('native WG rate limit retry scheduled: endpoint=tanks/stats accounts=%s delay=%.2f attempt=%s' % (len(requested), delay, attempt + 1))
+                        if _native_schedule_stats_retry(delay, lambda: begin(attempt + 1)): return
                     if outcome.get('category') == 'wg_api': _native_log_wg_api_error(outcome)
-                    _log('native WG individual recovery failed: dbID=%s category=%s responseCode=%s' % (player['dbid'], outcome.get('category'), outcome.get('http_status')))
-                    results[player['dbid']] = results.get(player['dbid'], _native_unavailable_result(player)); done()
-                request_json(url, individual_success, individual_failure, timeout=15.0, endpoint='tanks/stats', accounts=1, realm=realm)
-
-        account_ids = ','.join(str(player['dbid']) for player in misses)
-        url = _native_url(realm, 'tanks/stats', {'account_id': account_ids, 'fields': 'tank_id,all.battles,all.wins,mark_of_mastery'})
-        _log('tanks/stats request prepared: battles=yes wins=yes mastery=yes accounts=%s realm=%s' % (len(misses), realm))
-        _log('native WG request started: endpoint=tanks/stats accounts=%s realm=%s' % (len(misses), realm))
-        def success(payload, meta):
-            finish_success(misses, payload, meta, dict(cache_hits))
-        def failure(outcome):
-            if outcome.get('category') == 'wg_api': _native_log_wg_api_error(outcome)
-            _log('native WG request failed: category=%s responseCode=%s' % (outcome.get('category'), outcome.get('http_status')))
-            if outcome.get('category') == 'callback': _log('native callback diagnostics: args=%s types=%s' % (outcome.get('callback_args'), outcome.get('callback_types')))
-            fallback_token = (lookup_key, CACHE.get('generation'))
-            if outcome.get('category') == 'wg_api' and len(misses) > 1 and fallback_token not in NATIVE_BATCH_FALLBACKS:
-                NATIVE_BATCH_FALLBACKS.add(fallback_token); request_individuals(dict(cache_hits)); return
-            _native_finish(players, realm, tier, lookup_key, started, dict(cache_hits), stale, outcome.get('category'))
-        request_json(url, success, failure, timeout=15.0, endpoint='tanks/stats', accounts=len(misses), realm=realm)
+                    _log('native WG request failed: endpoint=tanks/stats accounts=%s category=%s responseCode=%s' % (len(requested), outcome.get('category'), outcome.get('http_status')))
+                    if len(requested) > 1 and outcome.get('category') in ('wg_api', 'malformed_response', 'invalid_json', 'callback', 'network', 'timeout', 'http', 'unknown'):
+                        _log('native WG chunk recovery queued: accounts=%s mode=sequential-individual' % len(requested))
+                        state['queue'] = [[player] for player in requested] + state['queue']; run_next(); return
+                    state['failed'] = True
+                    player = requested[0]
+                    if player['dbid'] not in state['results']: state['results'][player['dbid']] = _native_unavailable_result(player)
+                    run_next()
+                request_json(url, success, failure, timeout=15.0, endpoint='tanks/stats', accounts=len(requested), realm=realm)
+            begin()
+        run_next()
     if NATIVE_TANKOPEDIA and NATIVE_TANKOPEDIA_REALM == realm:
         request_stats(NATIVE_TANKOPEDIA); return
     cached_tanks = _native_load_tankopedia_cache(realm)

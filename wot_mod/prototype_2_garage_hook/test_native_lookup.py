@@ -13,6 +13,11 @@ mod.NATIVE_WG_APP_ID = 'test-public-id'
 url = mod._native_url('NA', 'tanks/stats', {'account_id': '1,2', 'fields': 'tank_id,all.battles'})
 assert url.startswith('https://api.worldoftanks.com/wot/tanks/stats/?')
 assert 'account_id=1%2C2' in url and 'application_id=test-public-id' in url
+mod.NATIVE_WG_APP_ID = ''
+assert mod._native_url('NA', 'tanks/stats', {}) is None
+mod.NATIVE_WG_APP_ID = '   '
+assert mod._native_url('NA', 'tanks/stats', {}) is None
+mod.NATIVE_WG_APP_ID = 'test-public-id'
 
 records = [{'tank_id': 7, 'all': {'battles': 9, 'wins': 4}}, {'tank_id': 8, 'all': {'battles': -1}}]
 tanks = {7: {'name': 'Tank Seven', 'tier': 8, 'type': 'heavyTank'}, 8: {'name': 'Tank Eight', 'tier': 8, 'type': 'mediumTank'}}
